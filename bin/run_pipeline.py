@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Main pipeline loop."""
-    logger.info("Starting security alert pipeline...")
+    logger.info("Starting AI-APW: AI-Powered Alert Prioritization for Wazuh...")
     
     # Initialize clients
     wazuh = WazuhClient()

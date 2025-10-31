@@ -94,7 +94,8 @@ def readyz():
 def root():
     """Root endpoint."""
     return jsonify({
-        "service": "security-alert-pipeline",
+        "service": "AI-APW",
+        "name": "AI-Powered Alert Prioritization for Wazuh",
         "version": "1.0.0",
         "env": ENV_NAME,
     }), 200

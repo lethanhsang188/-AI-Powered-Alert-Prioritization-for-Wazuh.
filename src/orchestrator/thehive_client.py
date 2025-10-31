@@ -165,7 +165,7 @@ class TheHiveClient:
             severity = 2
         
         # Build tags
-        tags = ["auto", "sap", dk] + triage.get("tags", [])
+        tags = ["auto", "ai-apw", dk] + triage.get("tags", [])
         
         description = f"""
 Alert Analysis Score: {score:.2f}

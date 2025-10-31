@@ -3,7 +3,7 @@ version: '3.8'
 services:
   pipeline:
     build: .
-    container_name: security-alert-pipeline
+    container_name: ai-apw
     env_file:
       - .env
     volumes:
@@ -21,7 +21,7 @@ services:
 
   api:
     build: .
-    container_name: security-alert-pipeline-api
+    container_name: ai-apw-api
     env_file:
       - .env
     volumes:

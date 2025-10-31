@@ -1,4 +1,4 @@
-# Security Alert Pipeline (SAP)
+# AI-APW: AI-Powered Alert Prioritization for Wazuh
 
 Automated security alert processing pipeline that collects alerts from Wazuh, analyzes them using heuristic and optional LLM-based triage, and creates cases in TheHive.
 
@@ -109,8 +109,8 @@ docker-compose up -d api
 #### Docker
 
 ```bash
-docker build -t security-alert-pipeline .
-docker run --env-file .env -v $(pwd)/state:/app/state security-alert-pipeline
+docker build -t ai-apw .
+docker run --env-file .env -v $(pwd)/state:/app/state ai-apw
 ```
 
 ## Pipeline Flow
