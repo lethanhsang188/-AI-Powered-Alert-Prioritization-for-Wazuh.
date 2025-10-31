@@ -39,8 +39,8 @@ Wazuh API → Collector → Analyzer → Orchestrator → TheHive
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/lethanhsang188/security-alert-pipeline.git
-cd security-alert-pipeline
+git clone https://github.com/lethanhsang188/ai-apw.git
+cd ai-apw
 ```
 
 2. Copy and configure environment variables:
