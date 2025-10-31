@@ -1,0 +1,19 @@
+{
+  "@timestamp": "2024-01-15T10:30:00.000Z",
+  "agent": {
+    "id": "001",
+    "name": "web-server-01",
+    "ip": "10.0.0.10"
+  },
+  "rule": {
+    "id": "5503",
+    "level": 12,
+    "description": "Attempt to login using a non-existent user",
+    "groups": ["authentication_failed", "syslog"]
+  },
+  "srcip": "192.168.1.100",
+  "user": "nonexistent_user",
+  "message": "Login attempt for user 'nonexistent_user' from IP 192.168.1.100 failed",
+  "location": "/var/log/auth.log"
+}
+
