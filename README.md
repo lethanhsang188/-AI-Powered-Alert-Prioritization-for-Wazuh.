@@ -39,7 +39,7 @@ Wazuh API → Collector → Analyzer → Orchestrator → TheHive
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/lethanhsang188/security-alert-pipeline.git
 cd security-alert-pipeline
 ```
 
