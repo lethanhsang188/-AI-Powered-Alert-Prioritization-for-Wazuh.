@@ -12,7 +12,6 @@ Automated security alert processing pipeline that collects alerts from Wazuh, an
 - **PII Redaction**: Automatic redaction of sensitive data before LLM processing
 - **TheHive Integration**: Creates and updates cases in TheHive with severity mapping
 - **n8n Notifications**: Optional webhook notifications for high-severity cases
-- **Health Checks**: `/healthz` and `/readyz` endpoints for Kubernetes
 
 ## Architecture
 

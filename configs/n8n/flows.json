@@ -1,0 +1,267 @@
+﻿{
+    "name":  "AI-APW Security Orchestration",
+    "id":  "ai-apw-security-orchestration",
+    "versionId":  "2025-11-02T00:00:00Z",
+    "active":  false,
+    "nodes":  [
+                  {
+                      "id":  "0b1a7f73-1e8b-4c6b-9c3c-1ae5f2dcb345",
+                      "name":  "APW Intake Webhook",
+                      "type":  "n8n-nodes-base.webhook",
+                      "typeVersion":  1,
+                      "position":  [
+                                       -520,
+                                       260
+                                   ],
+                      "parameters":  {
+                                         "httpMethod":  "POST",
+                                         "path":  "ai-apw/alert",
+                                         "responseMode":  "lastNode",
+                                         "options":  {
+                                                         "responseCode":  200,
+                                                         "responseHeaders":  [
+                                                                                 {
+                                                                                     "name":  "X-AI-APW-Workflow",
+                                                                                     "value":  "AI-APW-SOC-Orchestration"
+                                                                                 }
+                                                                             ]
+                                                     }
+                                     },
+                      "webhookId":  "ai-apw-alert-prioritization"
+                  },
+                  {
+                      "id":  "517eee1c-6f5e-4c2a-9801-9fae28c8b1dd",
+                      "name":  "Normalize Alert",
+                      "type":  "n8n-nodes-base.function",
+                      "typeVersion":  1,
+                      "position":  [
+                                       -260,
+                                       260
+                                   ],
+                      "parameters":  {
+                                         "functionCode":  "const crypto = require(\"crypto\");\n\nconst results = [];\n\nfor (const item of items) {\n  const payload = item.json || {};\n  const nowIso = new Date().toISOString();\n\n  const rawScore = Number.parseFloat(payload.score ?? payload.triage_score ?? 0) || 0;\n  const severityLabel = rawScore \u003e= 0.85 ? \"critical\" : rawScore \u003e= 0.7 ? \"high\" : \"medium\";\n  const severityRank = severityLabel === \"critical\" ? 4 : severityLabel === \"high\" ? 3 : 2;\n  const slaBySeverity = { critical: 15, high: 60, medium: 240 };\n  const recommendedSla = slaBySeverity[severityLabel];\n\n  const theHiveUi = (process.env.THEHIVE_UI_URL || process.env.THEHIVE_URL || \"\").replace(/\\/$/, \"\");\n  const caseId = payload.case_id || null;\n  const caseLink = caseId \u0026\u0026 theHiveUi ? `${theHiveUi}/index.html#/case/${caseId}` : null;\n\n  const baseTitle = payload.title || `AI-APW Alert for rule ${payload.rule_id || \"N/A\"}`;\n  const baseSummary = payload.summary || \"No summary provided\";\n  const tags = Array.isArray(payload.tags) ? payload.tags : [];\n\n  const dedupSeed = [\n    payload.rule_id || \"\",\n    payload.agent || \"\",\n    payload.public_url || \"\",\n    nowIso.substring(0, 10),\n  ].join(\":\");\n\n  const dedupKey = crypto.createHash(\"sha256\").update(dedupSeed).digest(\"hex\").slice(0, 16);\n\n  const record = {\n    received_at: nowIso,\n    alert: {\n      case_id: caseId,\n      case_link: caseLink,\n      agent: payload.agent || \"unknown\",\n      rule_id: payload.rule_id || null,\n      score: Number.parseFloat(rawScore.toFixed(4)),\n      title: baseTitle,\n      summary: baseSummary,\n      tags,\n      source_public_url: payload.public_url || null,\n    },\n    severity: {\n      label: severityLabel,\n      rank: severityRank,\n      color: severityLabel === \"critical\" ? \"#d9182d\" : severityLabel === \"high\" ? \"#e67e22\" : \"#f1c40f\",\n      rationale: `Final fused score ${rawScore.toFixed(2)} classified as ${severityLabel.toUpperCase()} according to AI-APW policy thresholds.`,\n    },\n    workflow: {\n      dedup_key_hint: dedupKey,\n      recommended_sla_minutes: recommendedSla,\n      playbook: severityLabel === \"critical\"\n        ? \"SOC-IR-Critical-Playbook-v3\"\n        : severityLabel === \"high\"\n          ? \"SOC-IR-High-Playbook-v2\"\n          : \"SOC-IR-Monitor-Playbook-v1\",\n      analyst_owner_queue: severityLabel === \"critical\" ? \"tier3-incident-command\"\n        : severityLabel === \"high\" ? \"tier2-dfir\"\n        : \"tier1-monitoring\",\n    },\n    triage: {\n      title: baseTitle,\n      summary: baseSummary,\n      tags,\n    },\n    timeline: [\n      {\n        ts: nowIso,\n        actor: \"n8n:ai-apw\",\n        action: \"ingest\",\n        detail: `Alert received from AI-APW pipeline with score ${rawScore.toFixed(2)}.`,\n        status: \"success\",\n      },\n    ],\n    metadata: {\n      pipeline_version: process.env.AI_APW_VERSION || \"unknown\",\n      environment: process.env.ENV_NAME || \"dev\",\n    },\n    case: {\n      hasId: Boolean(caseId),\n    },\n  };\n\n  const auditEndpoint = process.env.APW_AUDIT_ENDPOINT;\n  if (auditEndpoint) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: auditEndpoint,\n        body: {\n          event: \"ai_apw.alert_ingested\",\n          severity: severityLabel,\n          score: record.alert.score,\n          agent: record.alert.agent,\n          rule_id: record.alert.rule_id,\n          tags,\n          case_id: record.alert.case_id,\n          received_at: record.received_at,\n        },\n        json: true,\n        headers: {\n          \"Content-Type\": \"application/json\",\n        },\n      });\n      record.timeline.push({\n        ts: new Date().toISOString(),\n        actor: \"n8n:ai-apw\",\n        action: \"audit.log\",\n        detail: \"Alert metadata forwarded to central audit endpoint.\",\n        status: \"success\",\n      });\n    } catch (auditError) {\n      record.timeline.push({\n        ts: new Date().toISOString(),\n        actor: \"n8n:ai-apw\",\n        action: \"audit.log\",\n        detail: `Audit forwarding failed: ${auditError.message}`,\n        status: \"error\",\n      });\n    }\n  }\n\n  results.push({ json: record });\n}\n\nreturn results;"
+                                     }
+                  },
+                  {
+                      "id":  "26c7847b-f028-4690-bcc3-1f8795218d25",
+                      "name":  "If Critical?",
+                      "type":  "n8n-nodes-base.if",
+                      "typeVersion":  1,
+                      "position":  [
+                                       0,
+                                       260
+                                   ],
+                      "parameters":  {
+                                         "conditions":  {
+                                                            "number":  [
+                                                                           {
+                                                                               "value1":  "={{$json[\"severity\"][\"rank\"]}}",
+                                                                               "operation":  "equal",
+                                                                               "value2":  4
+                                                                           }
+                                                                       ]
+                                                        }
+                                     }
+                  },
+                  {
+                      "id":  "0f7ade8a-3b80-4495-a939-cf4c5c1a4d72",
+                      "name":  "Critical Playbook",
+                      "type":  "n8n-nodes-base.function",
+                      "typeVersion":  1,
+                      "position":  [
+                                       260,
+                                       140
+                                   ],
+                      "parameters":  {
+                                         "functionCode":  "const results = [];\nconst slackWebhook = process.env.SLACK_CRITICAL_WEBHOOK;\nconst teamsWebhook = process.env.TEAMS_CRITICAL_WEBHOOK;\nconst pagerDutyRoutingKey = process.env.PAGERDUTY_ROUTING_KEY;\nconst snowBaseUrl = (process.env.SERVICENOW_API_URL || \"\").replace(/\\/$/, \"\");\nconst snowUser = process.env.SERVICENOW_USER;\nconst snowPass = process.env.SERVICENOW_PASS;\nconst hiveBaseUrl = (process.env.THEHIVE_URL || \"\").replace(/\\/$/, \"\");\nconst hiveKey = process.env.THEHIVE_API_KEY;\n\nconst now = () =\u003e new Date().toISOString();\n\nfor (const item of items) {\n  const record = item.json;\n  const timeline = record.timeline || [];\n\n  const summaryLines = [\n    `Title: ${record.triage.title}`,\n    `Agent: ${record.alert.agent}`,\n    `Rule: ${record.alert.rule_id}`,\n    `Score: ${record.alert.score}`,\n    `Tags: ${(record.triage.tags || []).join(\", \") || \"none\"}`,\n    `SLA: ${record.workflow.recommended_sla_minutes} min`,\n  ].join(\"\\n\");\n\n  if (slackWebhook) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: slackWebhook,\n        body: {\n          text: \":rotating_light: *Critical Alert* :rotating_light:\\n${summaryLines}\\nCase: ${record.alert.case_link || record.alert.case_id || \"N/A\"}\",\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"notify.slack\",\n        detail: \"Critical alert pushed to Slack incident channel.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"notify.slack\",\n        detail: `Slack notification failed: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:critical-playbook\",\n      action: \"notify.slack\",\n      detail: \"Slack critical webhook not configured; step skipped.\",\n      status: \"skipped\",\n    });\n  }\n\n  if (teamsWebhook) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: teamsWebhook,\n        body: {\n          \"@type\": \"MessageCard\",\n          \"@context\": \"http://schema.org/extensions\",\n          summary: \"AI-APW Critical Alert\",\n          themeColor: \"EA4300\",\n          title: record.triage.title,\n          sections: [\n            {\n              activityTitle: \"Critical Alert\",\n              facts: [\n                { name: \"Agent\", value: record.alert.agent },\n                { name: \"Rule\", value: record.alert.rule_id || \"N/A\" },\n                { name: \"Score\", value: record.alert.score },\n                { name: \"SLA (min)\", value: record.workflow.recommended_sla_minutes },\n              ],\n              text: record.triage.summary,\n            },\n          ],\n          potentialAction: record.alert.case_link\n            ? [\n                {\n                  \"@type\": \"OpenUri\",\n                  name: \"Open TheHive Case\",\n                  targets: [{ os: \"default\", uri: record.alert.case_link }],\n                },\n              ]\n            : [],\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"notify.teams\",\n        detail: \"Critical alert pushed to Microsoft Teams bridge.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"notify.teams\",\n        detail: `Teams notification failed: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:critical-playbook\",\n      action: \"notify.teams\",\n      detail: \"Teams webhook not configured; step skipped.\",\n      status: \"skipped\",\n    });\n  }\n\n  if (pagerDutyRoutingKey) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: \"https://events.pagerduty.com/v2/enqueue\",\n        body: {\n          routing_key: pagerDutyRoutingKey,\n          event_action: \"trigger\",\n          payload: {\n            summary: `[AI-APW] ${record.triage.title}`,\n            severity: \"critical\",\n            source: record.alert.agent || \"unknown\",\n            component: \"ai-apw\",\n            group: \"soc\",\n            custom_details: {\n              score: record.alert.score,\n              rule_id: record.alert.rule_id,\n              tags: record.triage.tags,\n              case: record.alert.case_link || record.alert.case_id,\n            },\n          },\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"notify.pagerduty\",\n        detail: \"PagerDuty incident triggered for on-call team.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"notify.pagerduty\",\n        detail: `PagerDuty trigger failed: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:critical-playbook\",\n      action: \"notify.pagerduty\",\n      detail: \"PagerDuty routing key not set; escalation skipped.\",\n      status: \"skipped\",\n    });\n  }\n\n  if (snowBaseUrl \u0026\u0026 snowUser \u0026\u0026 snowPass) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: `${snowBaseUrl}/api/now/table/incident`,\n        auth: {\n          user: snowUser,\n          pass: snowPass,\n        },\n        body: {\n          short_description: `[AI-APW][Critical] ${record.triage.title}`,\n          description: `${record.triage.summary}\\n\\nAgent: ${record.alert.agent}\\nRule: ${record.alert.rule_id}\\nScore: ${record.alert.score}`,\n          urgency: \"1\",\n          impact: \"1\",\n          category: \"security\",\n          subcategory: \"intrusion\",\n          assignment_group: \"SOC - Incident Command\",\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"escalate.servicenow\",\n        detail: \"ServiceNow P1 incident created.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"escalate.servicenow\",\n        detail: `ServiceNow incident creation failed: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:critical-playbook\",\n      action: \"escalate.servicenow\",\n      detail: \"ServiceNow credentials not provided; skipping ITSM escalation.\",\n      status: \"skipped\",\n    });\n  }\n\n  if (record.alert.case_id \u0026\u0026 hiveBaseUrl \u0026\u0026 hiveKey) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: `${hiveBaseUrl}/api/case/${record.alert.case_id}/task`,\n        headers: {\n          Authorization: `Bearer ${hiveKey}`,\n          \"Content-Type\": \"application/json\",\n        },\n        body: {\n          title: \"n8n :: Critical escalation executed\",\n          description: `Automated escalations completed at ${now()}.\\n\\nSummary:\\n${summaryLines}`,\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"case.note\",\n        detail: \"Automation note added to TheHive case.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:critical-playbook\",\n        action: \"case.note\",\n        detail: `Unable to add TheHive task/comment: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:critical-playbook\",\n      action: \"case.note\",\n      detail: \"No case identifier or TheHive API credentials; skipping case note.\",\n      status: \"skipped\",\n    });\n  }\n\n  results.push({ json: record });\n}\n\nreturn results;"
+                                     }
+                  },
+                  {
+                      "id":  "8fcc4c78-a42e-4a6f-b321-e4f944d8cdd2",
+                      "name":  "If High?",
+                      "type":  "n8n-nodes-base.if",
+                      "typeVersion":  1,
+                      "position":  [
+                                       260,
+                                       420
+                                   ],
+                      "parameters":  {
+                                         "conditions":  {
+                                                            "number":  [
+                                                                           {
+                                                                               "value1":  "={{$json[\"severity\"][\"rank\"]}}",
+                                                                               "operation":  "equal",
+                                                                               "value2":  3
+                                                                           }
+                                                                       ]
+                                                        }
+                                     }
+                  },
+                  {
+                      "id":  "bb209c1d-45a5-4c68-bd3f-27be27fa9982",
+                      "name":  "High Playbook",
+                      "type":  "n8n-nodes-base.function",
+                      "typeVersion":  1,
+                      "position":  [
+                                       520,
+                                       360
+                                   ],
+                      "parameters":  {
+                                         "functionCode":  "const results = [];\nconst slackWebhook = process.env.SLACK_HIGH_WEBHOOK || process.env.SLACK_CRITICAL_WEBHOOK;\nconst jiraBaseUrl = (process.env.JIRA_API_URL || \"\").replace(/\\/$/, \"\");\nconst jiraUser = process.env.JIRA_USER;\nconst jiraToken = process.env.JIRA_API_TOKEN;\nconst hiveBaseUrl = (process.env.THEHIVE_URL || \"\").replace(/\\/$/, \"\");\nconst hiveKey = process.env.THEHIVE_API_KEY;\n\nconst now = () =\u003e new Date().toISOString();\n\nfor (const item of items) {\n  const record = item.json;\n  const timeline = record.timeline || [];\n  const severityLabel = record.severity?.label || \"high\";\n  const summaryText = `${record.triage.summary}\\n\\nAgent: ${record.alert.agent}\\nRule: ${record.alert.rule_id}\\nScore: ${record.alert.score}`;\n\n  if (slackWebhook) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: slackWebhook,\n        body: {\n          text: `:warning: *High Alert* :warning:\\n${record.triage.title}\\nScore: ${record.alert.score} | SLA: ${record.workflow.recommended_sla_minutes} min`,\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:high-playbook\",\n        action: \"notify.slack\",\n        detail: \"High severity alert sent to Slack triage channel.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:high-playbook\",\n        action: \"notify.slack\",\n        detail: `Slack notification failed: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:high-playbook\",\n      action: \"notify.slack\",\n      detail: \"Slack high webhook not configured; step skipped.\",\n      status: \"skipped\",\n    });\n  }\n\n  if (jiraBaseUrl \u0026\u0026 jiraUser \u0026\u0026 jiraToken) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: `${jiraBaseUrl}/rest/api/3/issue`,\n        auth: {\n          user: jiraUser,\n          pass: jiraToken,\n        },\n        body: {\n          fields: {\n            project: { key: process.env.JIRA_PROJECT_KEY || \"SOC\" },\n            summary: `[AI-APW][High] ${record.triage.title}`,\n            description: summaryText,\n            issuetype: { name: process.env.JIRA_ISSUE_TYPE || \"Task\" },\n            labels: [\"ai-apw\", \"wazuh\", severityLabel],\n          },\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:high-playbook\",\n        action: \"ticket.jira\",\n        detail: \"Jira ticket created for Tier-2 follow-up.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:high-playbook\",\n        action: \"ticket.jira\",\n        detail: `Jira issue creation failed: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:high-playbook\",\n      action: \"ticket.jira\",\n      detail: \"Jira integration not configured; skipping ticket.\",\n      status: \"skipped\",\n    });\n  }\n\n  if (record.alert.case_id \u0026\u0026 hiveBaseUrl \u0026\u0026 hiveKey) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: `${hiveBaseUrl}/api/case/${record.alert.case_id}/task`,\n        headers: {\n          Authorization: `Bearer ${hiveKey}`,\n          \"Content-Type\": \"application/json\",\n        },\n        body: {\n          title: \"n8n :: High severity playbook executed\",\n          description: `High severity automation completed at ${now()}.\\n\\nSummary:\\n${summaryText}`,\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:high-playbook\",\n        action: \"case.note\",\n        detail: \"Documented automation run in TheHive.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:high-playbook\",\n        action: \"case.note\",\n        detail: `Failed to write TheHive note: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:high-playbook\",\n      action: \"case.note\",\n      detail: \"No case identifier or TheHive credentials; note skipped.\",\n      status: \"skipped\",\n    });\n  }\n\n  results.push({ json: record });\n}\n\nreturn results;"
+                                     }
+                  },
+                  {
+                      "id":  "20c9ae6b-03c5-48a1-bddc-b2e56f257a7e",
+                      "name":  "Medium Playbook",
+                      "type":  "n8n-nodes-base.function",
+                      "typeVersion":  1,
+                      "position":  [
+                                       520,
+                                       540
+                                   ],
+                      "parameters":  {
+                                         "functionCode":  "const results = [];\nconst queueWebhook = process.env.SIEM_TICKETING_WEBHOOK;\nconst digestWebhook = process.env.MEDIUM_DIGEST_WEBHOOK;\nconst hiveBaseUrl = (process.env.THEHIVE_URL || \"\").replace(/\\/$/, \"\");\nconst hiveKey = process.env.THEHIVE_API_KEY;\n\nconst now = () =\u003e new Date().toISOString();\n\nfor (const item of items) {\n  const record = item.json;\n  const timeline = record.timeline || [];\n\n  if (queueWebhook) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: queueWebhook,\n        body: {\n          event: \"ai_apw.medium_alert\",\n          title: record.triage.title,\n          agent: record.alert.agent,\n          score: record.alert.score,\n          tags: record.triage.tags,\n          summary: record.triage.summary,\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:medium-playbook\",\n        action: \"queue.siem\",\n        detail: \"Forwarded alert to monitoring queue.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:medium-playbook\",\n        action: \"queue.siem\",\n        detail: `Failed to forward to monitoring queue: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:medium-playbook\",\n      action: \"queue.siem\",\n      detail: \"Monitoring queue webhook not configured; step skipped.\",\n      status: \"skipped\",\n    });\n  }\n\n  if (digestWebhook) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: digestWebhook,\n        body: {\n          title: record.triage.title,\n          severity: record.severity.label,\n          received_at: record.received_at,\n          summary: record.triage.summary,\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:medium-playbook\",\n        action: \"digest.notify\",\n        detail: \"Added to daily SOC digest.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:medium-playbook\",\n        action: \"digest.notify\",\n        detail: `Failed to push to digest: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:medium-playbook\",\n      action: \"digest.notify\",\n      detail: \"Digest webhook not configured; step skipped.\",\n      status: \"skipped\",\n    });\n  }\n\n  if (record.alert.case_id \u0026\u0026 hiveBaseUrl \u0026\u0026 hiveKey) {\n    try {\n      await this.helpers.httpRequest({\n        method: \"POST\",\n        url: `${hiveBaseUrl}/api/case/${record.alert.case_id}/task`,\n        headers: {\n          Authorization: `Bearer ${hiveKey}`,\n          \"Content-Type\": \"application/json\",\n        },\n        body: {\n          title: \"n8n :: Medium alert queued\",\n          description: `Medium severity automation completed at ${now()}.\\n\\nSummary:\\n${record.triage.summary}`,\n        },\n        json: true,\n      });\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:medium-playbook\",\n        action: \"case.note\",\n        detail: \"Recorded monitoring action in TheHive.\",\n        status: \"success\",\n      });\n    } catch (error) {\n      timeline.push({\n        ts: now(),\n        actor: \"n8n:medium-playbook\",\n        action: \"case.note\",\n        detail: `Failed to add TheHive note: ${error.message}`,\n        status: \"error\",\n      });\n    }\n  } else {\n    timeline.push({\n      ts: now(),\n      actor: \"n8n:medium-playbook\",\n      action: \"case.note\",\n      detail: \"No case identifier or TheHive credentials; note skipped.\",\n      status: \"skipped\",\n    });\n  }\n\n  results.push({ json: record });\n}\n\nreturn results;"
+                                     }
+                  },
+                  {
+                      "id":  "5a77a0d5-40c9-4f3f-a49a-4ab83e6e420b",
+                      "name":  "Finalize Response",
+                      "type":  "n8n-nodes-base.function",
+                      "typeVersion":  1,
+                      "position":  [
+                                       780,
+                                       260
+                                   ],
+                      "parameters":  {
+                                         "functionCode":  "const results = [];\n\nfor (const item of items) {\n  const record = item.json;\n  const ack = {\n    status: \"processed\",\n    severity: record.severity.label,\n    score: record.alert.score,\n    case_id: record.alert.case_id,\n    case_link: record.alert.case_link,\n    recommended_sla_minutes: record.workflow.recommended_sla_minutes,\n    actions: (record.timeline || [])\n      .filter(entry =\u003e entry.action !== \"ingest\")\n      .map(entry =\u003e ({\n        ts: entry.ts,\n        actor: entry.actor,\n        action: entry.action,\n        status: entry.status,\n        detail: entry.detail,\n      })),\n  };\n\n  results.push({\n    json: {\n      ack,\n      alert: record.alert,\n      severity: record.severity,\n      workflow: record.workflow,\n      timeline: record.timeline,\n    },\n  });\n}\n\nreturn results;"
+                                     }
+                  },
+                  {
+                      "id":  "b4f0be1c-1a3a-42ce-95c8-96f3dd6f73a1",
+                      "name":  "Respond to Webhook",
+                      "type":  "n8n-nodes-base.respondToWebhook",
+                      "typeVersion":  1,
+                      "position":  [
+                                       1040,
+                                       260
+                                   ],
+                      "parameters":  {
+                                         "responseBody":  "={{$json}}",
+                                         "responseCode":  200,
+                                         "options":  {
+                                                         "responseContentType":  "application/json"
+                                                     }
+                                     }
+                  }
+              ],
+    "connections":  {
+                        "APW Intake Webhook":  {
+                                                   "main":  [
+                                                                {
+                                                                    "node":  "Normalize Alert",
+                                                                    "type":  "main",
+                                                                    "index":  0
+                                                                }
+                                                            ]
+                                               },
+                        "Normalize Alert":  {
+                                                "main":  [
+                                                             {
+                                                                 "node":  "If Critical?",
+                                                                 "type":  "main",
+                                                                 "index":  0
+                                                             }
+                                                         ]
+                                            },
+                        "If Critical?":  {
+                                             "main":  [
+                                                          [
+                                                              {
+                                                                  "node":  "Critical Playbook",
+                                                                  "type":  "main",
+                                                                  "index":  0
+                                                              }
+                                                          ],
+                                                          [
+                                                              {
+                                                                  "node":  "If High?",
+                                                                  "type":  "main",
+                                                                  "index":  0
+                                                              }
+                                                          ]
+                                                      ]
+                                         },
+                        "Critical Playbook":  {
+                                                  "main":  [
+                                                               {
+                                                                   "node":  "Finalize Response",
+                                                                   "type":  "main",
+                                                                   "index":  0
+                                                               }
+                                                           ]
+                                              },
+                        "If High?":  {
+                                         "main":  [
+                                                      [
+                                                          {
+                                                              "node":  "High Playbook",
+                                                              "type":  "main",
+                                                              "index":  0
+                                                          }
+                                                      ],
+                                                      [
+                                                          {
+                                                              "node":  "Medium Playbook",
+                                                              "type":  "main",
+                                                              "index":  0
+                                                          }
+                                                      ]
+                                                  ]
+                                     },
+                        "High Playbook":  {
+                                              "main":  [
+                                                           {
+                                                               "node":  "Finalize Response",
+                                                               "type":  "main",
+                                                               "index":  0
+                                                           }
+                                                       ]
+                                          },
+                        "Medium Playbook":  {
+                                                "main":  [
+                                                             {
+                                                                 "node":  "Finalize Response",
+                                                                 "type":  "main",
+                                                                 "index":  0
+                                                             }
+                                                         ]
+                                            },
+                        "Finalize Response":  {
+                                                  "main":  [
+                                                               {
+                                                                   "node":  "Respond to Webhook",
+                                                                   "type":  "main",
+                                                                   "index":  0
+                                                               }
+                                                           ]
+                                              }
+                    },
+    "settings":  {
+                     "executionOrder":  "v1",
+                     "timezone":  "Etc/UTC"
+                 },
+    "pinData":  {
+
+                },
+    "tags":  [
+                 {
+                     "name":  "ai-apw"
+                 },
+                 {
+                     "name":  "soc"
+                 },
+                 {
+                     "name":  "wazuh"
+                 }
+             ]
+}
