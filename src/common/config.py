@@ -54,6 +54,8 @@ WAZUH_MIN_LEVEL = get_env_int("WAZUH_MIN_LEVEL", 7)
 WAZUH_POLL_INTERVAL_SEC = get_env_int("WAZUH_POLL_INTERVAL_SEC", 8)
 WAZUH_PAGE_LIMIT = get_env_int("WAZUH_PAGE_LIMIT", 200)
 CURSOR_PATH = get_env("CURSOR_PATH", "/app/state/cursor.json")
+WAZUH_CA_CERT = get_env("WAZUH_CA_CERT", "")
+WAZUH_VERIFY_SSL = get_env_bool("WAZUH_VERIFY_SSL", True)
 
 # Validate Wazuh authentication
 if not WAZUH_API_TOKEN and (not WAZUH_API_USER or not WAZUH_API_PASS):

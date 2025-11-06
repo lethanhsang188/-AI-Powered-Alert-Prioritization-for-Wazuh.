@@ -13,6 +13,8 @@ from ..common.config import (
     WAZUH_MIN_LEVEL,
     WAZUH_PAGE_LIMIT,
     CURSOR_PATH,
+    WAZUH_CA_CERT,
+    WAZUH_VERIFY_SSL,
 )
 from ..common.web import RetrySession
 
@@ -28,19 +30,65 @@ class WazuhClient:
     def __init__(self):
         self.base_url = WAZUH_API_URL.rstrip("/")
         self.session = RetrySession()
+        self._using_static_token = bool(WAZUH_API_TOKEN)
+
+        if WAZUH_CA_CERT:
+            self.session.verify = WAZUH_CA_CERT
+        else:
+            self.session.verify = WAZUH_VERIFY_SSL
+
         self._setup_auth()
-    
+
     def _setup_auth(self) -> None:
         """Configure authentication (token preferred, else Basic)."""
-        if WAZUH_API_TOKEN:
+        if self._using_static_token:
             self.session.headers.update({
                 "Authorization": f"Bearer {WAZUH_API_TOKEN}"
             })
             logger.info("Using Wazuh API token authentication")
         else:
-            from requests.auth import HTTPBasicAuth
-            self.session.auth = HTTPBasicAuth(WAZUH_API_USER, WAZUH_API_PASS)
-            logger.info("Using Wazuh API Basic authentication")
+            self._authenticate_with_credentials()
+
+    def _authenticate_with_credentials(self) -> None:
+        """Request a JWT token using configured credentials."""
+        if not WAZUH_API_USER or not WAZUH_API_PASS:
+            raise ValueError(
+                "Wazuh credentials are required when WAZUH_API_TOKEN is not set"
+            )
+
+        auth_url = f"{self.base_url}/security/user/authenticate"
+        payload = {"username": WAZUH_API_USER, "password": WAZUH_API_PASS}
+
+        try:
+            response = self.session.request_with_backoff(
+                "POST", auth_url, json=payload
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            logger.error(
+                f"Failed to authenticate with Wazuh API at {auth_url}: {exc}",
+                exc_info=True,
+            )
+            raise
+
+        try:
+            data = response.json() if response.content else {}
+        except ValueError as exc:
+            logger.error(
+                "Authentication response from Wazuh API was not valid JSON", exc_info=True
+            )
+            raise ValueError("Invalid JSON in Wazuh authentication response") from exc
+        token = None
+
+        if isinstance(data, dict):
+            token = data.get("data", {}).get("token")
+
+        if not token:
+            raise ValueError("Wazuh authentication response missing token")
+
+        self.session.headers.update({"Authorization": f"Bearer {token}"})
+        self.session.auth = None
+        logger.info("Authenticated with Wazuh API using JWT token")
     
     def _load_cursor(self) -> Optional[str]:
         """Load last processed timestamp from cursor file."""
@@ -103,6 +151,14 @@ class WazuhClient:
         
         try:
             response = self.session.request_with_backoff("GET", url, params=params)
+
+            if response.status_code == 401 and not self._using_static_token:
+                logger.info("Wazuh token expired or unauthorized, refreshing token")
+                self._authenticate_with_credentials()
+                response = self.session.request_with_backoff(
+                    "GET", url, params=params
+                )
+
             response.raise_for_status()
             
             data = response.json()
