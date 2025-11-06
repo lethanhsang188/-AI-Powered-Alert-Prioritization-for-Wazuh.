@@ -29,7 +29,11 @@ class WazuhClient:
     
     def __init__(self):
         self.base_url = WAZUH_API_URL.rstrip("/")
-        self.session = RetrySession()
+        # Disable inheriting proxy configuration from the host environment so
+        # that requests to internal Wazuh appliances (e.g. 172.x.x.x networks)
+        # are sent directly instead of through a corporate MITM proxy which
+        # rejects the tunnel.
+        self.session = RetrySession(trust_env=False)
         self._using_static_token = bool(WAZUH_API_TOKEN)
 
         if WAZUH_CA_CERT:

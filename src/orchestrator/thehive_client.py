@@ -14,7 +14,9 @@ class TheHiveClient:
     
     def __init__(self):
         self.base_url = THEHIVE_URL.rstrip("/")
-        self.session = RetrySession()
+        # Use direct connections for TheHive to avoid proxy interception of
+        # private network requests.
+        self.session = RetrySession(trust_env=False)
         self.session.headers.update({
             "Authorization": f"Bearer {THEHIVE_API_KEY}",
             "Content-Type": "application/json",

@@ -53,7 +53,7 @@ def readyz():
     
     # Check Wazuh API (lightweight connection test)
     try:
-        session = RetrySession(max_retries=1)
+        session = RetrySession(max_retries=1, trust_env=False)
         # Quick HEAD request to check if service is reachable
         response = session.request("HEAD", WAZUH_API_URL, timeout=3)
         checks["wazuh"] = "ok" if response.status_code < 500 else "unavailable"
@@ -65,7 +65,7 @@ def readyz():
     # Check TheHive API (lightweight connection test)
     try:
         if THEHIVE_API_KEY:
-            session = RetrySession(max_retries=1)
+            session = RetrySession(max_retries=1, trust_env=False)
             session.headers.update({"Authorization": f"Bearer {THEHIVE_API_KEY}"})
             response = session.request("HEAD", THEHIVE_URL, timeout=3)
             checks["thehive"] = "ok" if response.status_code < 500 else "unavailable"

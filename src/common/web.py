@@ -17,8 +17,15 @@ class RetrySession(Session):
         max_retries: int = 3,
         backoff_factor: float = 0.5,
         status_forcelist: Optional[list] = None,
+        trust_env: bool = True,
     ):
         super().__init__()
+        # Allow callers to opt-out of inheriting proxy and certificate settings
+        # from the running environment. This is useful when communicating with
+        # services that are only reachable on a private network where the
+        # configured corporate proxy would block the request (for example,
+        # 172.x.x.x addresses in lab environments).
+        self.trust_env = trust_env
         if status_forcelist is None:
             status_forcelist = [500, 502, 503, 504]
         
