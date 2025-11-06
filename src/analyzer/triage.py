@@ -4,8 +4,8 @@ from typing import Any, Dict
 
 from .heuristic import score as heuristic_score
 from .llm import triage_llm
-from ..common.config import HEURISTIC_WEIGHT, LLM_WEIGHT
-from ..common.redaction import Redactor
+from common.config import HEURISTIC_WEIGHT, LLM_WEIGHT
+from common.redaction import Redactor
 
 logger = logging.getLogger(__name__)
 

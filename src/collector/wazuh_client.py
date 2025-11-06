@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from ..common.config import (
+from common.config import (
     WAZUH_API_URL,
     WAZUH_API_USER,
     WAZUH_API_PASS,
@@ -16,7 +16,7 @@ from ..common.config import (
     WAZUH_CA_CERT,
     WAZUH_VERIFY_SSL,
 )
-from ..common.web import RetrySession
+from common.web import RetrySession
 
 logger = logging.getLogger(__name__)
 

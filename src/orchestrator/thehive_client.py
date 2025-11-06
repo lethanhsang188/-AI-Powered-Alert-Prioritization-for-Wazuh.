@@ -2,9 +2,9 @@
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from ..common.config import THEHIVE_URL, THEHIVE_API_KEY
-from ..common.dedup import dedup_key
-from ..common.web import RetrySession
+from common.config import THEHIVE_URL, THEHIVE_API_KEY
+from common.dedup import dedup_key
+from common.web import RetrySession
 
 logger = logging.getLogger(__name__)
 

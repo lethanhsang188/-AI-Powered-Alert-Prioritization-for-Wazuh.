@@ -2,8 +2,8 @@
 import logging
 from typing import Any, Dict, Optional
 
-from ..common.config import N8N_WEBHOOK_URL, N8N_WEBHOOK_PUBLIC_URL
-from ..common.web import RetrySession
+from common.config import N8N_WEBHOOK_URL, N8N_WEBHOOK_PUBLIC_URL
+from common.web import RetrySession
 
 logger = logging.getLogger(__name__)
 

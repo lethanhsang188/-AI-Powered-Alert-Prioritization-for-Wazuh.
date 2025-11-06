@@ -3,8 +3,8 @@ import logging
 import os
 from flask import Flask, jsonify
 
-from ..common.config import ENV_NAME
-from ..common.logging import setup_logging
+from common.config import ENV_NAME
+from common.logging import setup_logging
 
 # Setup logging
 setup_logging()
@@ -29,13 +29,13 @@ def readyz():
     - Wazuh API connection (basic check)
     - TheHive API connection (basic check)
     """
-    from ..common.config import (
+    from common.config import (
         CURSOR_PATH,
         WAZUH_API_URL,
         THEHIVE_URL,
         THEHIVE_API_KEY,
     )
-    from ..common.web import RetrySession
+    from common.web import RetrySession
     
     checks = {}
     all_ready = True
@@ -102,6 +102,6 @@ def root():
 
 
 if __name__ == "__main__":
-    from ..common.config import API_PORT
+    from common.config import API_PORT
     app.run(host="0.0.0.0", port=API_PORT, debug=False)
 

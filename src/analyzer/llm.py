@@ -2,7 +2,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from ..common.config import (
+from common.config import (
     OPENAI_API_BASE,
     OPENAI_API_KEY,
     LLM_MODEL,
@@ -10,7 +10,7 @@ from ..common.config import (
     LLM_TIMEOUT_SEC,
     LLM_ENABLE,
 )
-from ..common.web import RetrySession
+from common.web import RetrySession
 
 logger = logging.getLogger(__name__)
 
