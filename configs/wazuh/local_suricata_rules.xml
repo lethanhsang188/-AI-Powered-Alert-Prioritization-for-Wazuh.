@@ -1,0 +1,196 @@
+<!--
+  Local Suricata Rules for AI-Powered Alert Prioritization
+  Copyright (C) 2025, Wazuh Inc.
+  
+  These rules are designed to:
+  1. Properly identify attack types (SQL injection, XSS, CSRF, command injection, file inclusion, file upload, HTTP DoS, SYN DoS, scan/recon)
+  2. Set appropriate levels for each attack type
+  3. Distinguish between "Attempt" vs "Likely successful" attacks
+  4. Reduce false positives (especially for HTTP anomalies)
+-->
+
+<group name="suricata,local,soc,">
+
+  <!-- Base rule: Any Suricata detection -->
+  <rule id="100100" level="5">
+    <if_sid>86601</if_sid>
+    <description>Suricata: Alert - Any Detection Signature</description>
+    <group>suricata,</group>
+  </rule>
+
+  <!-- Precision mappings for the DVWA lab traffic to reduce false positives -->
+
+  <!-- ET WEB_SERVER PHP System Command in HTTP POST (webshell/file upload) -->
+  <rule id="100130" level="12">
+    <if_sid>86601</if_sid>
+    <field name="data.alert.signature_id">2020102</field>
+    <description>Suricata: Web attack success - PHP system command in HTTP POST (possible webshell upload)</description>
+    <group>attack,command_injection,file_upload,webshell,suricata,</group>
+  </rule>
+
+  <!-- SQLi signatures coming from Suricata (fallback when signature already classifies SQLi) -->
+  <rule id="100131" level="7">
+    <if_sid>86601</if_sid>
+    <field name="data.alert.signature">(?i)sql injection|sqli</field>
+    <description>Suricata: SQL injection attempt</description>
+    <group>attack,sql_injection,suricata,</group>
+  </rule>
+
+  <!-- XSS signatures coming from Suricata -->
+  <rule id="100132" level="7">
+    <if_sid>86601</if_sid>
+    <field name="data.alert.signature">(?i)xss|cross[- ]site scripting</field>
+    <description>Suricata: XSS attempt</description>
+    <group>attack,xss,suricata,</group>
+  </rule>
+
+  <!-- CSRF Detection - Signature ID 2221036 with CSRF URL pattern -->
+  <rule id="100133" level="8">
+    <if_sid>86601</if_sid>
+    <field name="data.alert.signature_id">2221036</field>
+    <field name="data.http.url">(?i)/dvwa/vulnerabilities/csrf</field>
+    <description>Suricata: CSRF Attack Detected - HTTP Anomaly on CSRF Endpoint (MITRE T1190)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,csrf,suricata,pci_dss_6.5,pci_dss_11.4,gdpr_IV_35.7.d,nist_800_53_SA.11,nist_800_53_SI.4,tsc_CC6.6,tsc_CC7.1,tsc_CC8.1,tsc_CC6.1,tsc_CC6.8,tsc_CC7.2,tsc_CC7.3,</group>
+  </rule>
+
+  <!-- CSRF Detection - Cross-origin referer pattern -->
+  <rule id="100143" level="8">
+    <if_sid>86601</if_sid>
+    <field name="data.http.url">(?i)/dvwa/vulnerabilities/csrf</field>
+    <field name="data.http.http_refer">(?i)localhost|127\.0\.0\.1|http://[^/]+/[^/]</field>
+    <description>Suricata: CSRF Attack Detected - Cross-origin Request with Suspicious Referer (MITRE T1190)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,csrf,suricata,pci_dss_6.5,pci_dss_11.4,gdpr_IV_35.7.d,nist_800_53_SA.11,nist_800_53_SI.4,tsc_CC6.6,tsc_CC7.1,tsc_CC8.1,tsc_CC6.1,tsc_CC6.8,tsc_CC7.2,tsc_CC7.3,</group>
+  </rule>
+
+  <!-- File upload to DVWA upload endpoint carrying PHP/phtml -->
+  <rule id="100134" level="12">
+    <if_sid>86601</if_sid>
+    <field name="data.http.url">(?i)/dvwa/vulnerabilities/upload/</field>
+    <field name="data.files[0].filename">(?i)\.(php|phtml|php\d|php\.)</field>
+    <description>Suricata: Suspicious PHP upload to DVWA (likely webshell)</description>
+    <group>attack,file_upload,webshell,suricata,</group>
+  </rule>
+
+  <!-- ============================================ -->
+  <!-- COMMAND INJECTION DETECTION -->
+  <!-- ============================================ -->
+
+  <!-- Command Injection Attempt - Match in full_log for better detection -->
+  <rule id="100146" level="12">
+    <if_sid>86601</if_sid>
+    <field name="full_log">(?i)bash.*-i.*>&.*/dev/tcp|bash.*-i.*>&.*/dev/tcp/|nc.*-e.*bash|netcat.*-e.*bash</field>
+    <description>Suricata: High - Command Injection - Reverse Shell Pattern in Full Log (MITRE T1059, T1190)</description>
+    <mitre>
+      <id>T1059</id>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,command_injection,suricata,pci_dss_6.5,pci_dss_11.4,gdpr_IV_35.7.d,nist_800_53_SA.11,nist_800_53_SI.4,tsc_CC6.6,tsc_CC7.1,tsc_CC8.1,tsc_CC6.1,tsc_CC6.8,tsc_CC7.2,tsc_CC7.3,</group>
+  </rule>
+
+  <!-- Command Injection Attempt - Basic patterns -->
+  <rule id="100135" level="7">
+    <if_sid>86601</if_sid>
+    <match><![CDATA[bash -i|/dev/tcp|nc |netcat |\&\&|\|\||;.*bash|;.*sh|;.*nc]]></match>
+    <description>Suricata: Command injection attempt</description>
+    <group>attack,command_injection,suricata,</group>
+  </rule>
+
+  <!-- Command Injection - Signature ID 2052797 (ET WEB_SERVER Possible bash shell piped to dev tcp) -->
+  <rule id="100144" level="13">
+    <if_sid>86601</if_sid>
+    <field name="data.alert.signature_id">2052797</field>
+    <description>Suricata: Critical - Command Injection Detected - Reverse Shell Attempt (Signature 2052797) (MITRE T1059, T1190)</description>
+    <mitre>
+      <id>T1059</id>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,command_injection,suricata,pci_dss_6.5,pci_dss_11.4,gdpr_IV_35.7.d,nist_800_53_SA.11,nist_800_53_SI.4,tsc_CC6.6,tsc_CC7.1,tsc_CC8.1,tsc_CC6.1,tsc_CC6.8,tsc_CC7.2,tsc_CC7.3,</group>
+  </rule>
+
+  <!-- Command Injection - Reverse shell patterns (high confidence) -->
+  <rule id="100136" level="12">
+    <if_sid>86601</if_sid>
+    <match><![CDATA[/dev/tcp/|bash.*-i.*>&|nc.*-e.*bash|netcat.*-e.*bash|reverse.*shell]]></match>
+    <description>Suricata: Command injection - reverse shell detected</description>
+    <group>attack,command_injection,suricata,</group>
+  </rule>
+
+  <!-- Command Injection - DVWA exec endpoint with reverse shell pattern -->
+  <rule id="100145" level="13">
+    <if_sid>86601</if_sid>
+    <field name="data.http.url">(?i)/dvwa/vulnerabilities/exec/</field>
+    <match><![CDATA[bash.*-i|/dev/tcp/|nc.*-e|netcat.*-e|reverse.*shell]]></match>
+    <description>Suricata: Critical - Command Injection on DVWA Exec Endpoint - Reverse Shell Attempt (MITRE T1059, T1190)</description>
+    <mitre>
+      <id>T1059</id>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,command_injection,suricata,pci_dss_6.5,pci_dss_11.4,gdpr_IV_35.7.d,nist_800_53_SA.11,nist_800_53_SI.4,tsc_CC6.6,tsc_CC7.1,tsc_CC8.1,tsc_CC6.1,tsc_CC6.8,tsc_CC7.2,tsc_CC7.3,</group>
+  </rule>
+
+  <!-- Command Injection - DVWA exec endpoint -->
+  <rule id="100137" level="7">
+    <if_sid>86601</if_sid>
+    <field name="data.http.url">(?i)/dvwa/vulnerabilities/exec/</field>
+    <match><![CDATA[;|\&\&|\|\||`|exec|system|shell_exec]]></match>
+    <description>Suricata: Command injection attempt against DVWA exec endpoint</description>
+    <group>attack,command_injection,suricata,</group>
+  </rule>
+
+  <!-- Command Injection Success - File system access indicators -->
+  <rule id="100138" level="12">
+    <if_sid>86601</if_sid>
+    <match>/etc/passwd|/etc/shadow|root:x:|uid=0|gid=0|drwxr-xr-x</match>
+    <description>Suricata: Command injection success - file system access detected</description>
+    <group>attack,command_injection,suricata,</group>
+  </rule>
+
+  <!-- ============================================ -->
+  <!-- HTTP DoS DETECTION -->
+  <!-- ============================================ -->
+
+  <!-- HTTP DoS - Flood patterns -->
+  <rule id="100139" level="10">
+    <if_sid>86601</if_sid>
+    <match>HTTP flood|HTTP Flood|DoS|Denial|request flood|Slowloris|Slow HTTP</match>
+    <description>Suricata: HTTP DoS detected</description>
+    <group>attack,invalid_access,suricata,</group>
+  </rule>
+
+  <!-- HTTP DoS - Multiple requests pattern (frequency-based) -->
+  <rule id="100140" level="10" frequency="50" timeframe="60">
+    <if_sid>86601</if_sid>
+    <same_source_ip />
+    <description>Suricata: Multiple HTTP requests from same source (possible DoS)</description>
+    <group>attack,invalid_access,suricata,</group>
+  </rule>
+
+  <!-- ============================================ -->
+  <!-- SYN DoS DETECTION -->
+  <!-- ============================================ -->
+
+  <!-- SYN Flood detection -->
+  <rule id="100141" level="10">
+    <if_sid>86601</if_sid>
+    <match>SYN flood|SYN Flood|TCP SYN flood|SYN attack</match>
+    <description>Suricata: SYN flood detected</description>
+    <group>attack,invalid_access,suricata,</group>
+  </rule>
+
+  <!-- SYN Flood - Multiple SYN packets pattern -->
+  <rule id="100142" level="10" frequency="100" timeframe="10">
+    <if_sid>86601</if_sid>
+    <match>SYN|syn</match>
+    <same_source_ip />
+    <description>Suricata: Multiple SYN packets from same source (possible SYN flood)</description>
+    <group>attack,invalid_access,suricata,</group>
+  </rule>
+
+</group>
+

@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment - NEVER commit these files (contains sensitive API keys, passwords, tokens)
+.env
+.env.local
+.env.*.local
+*.env
+!env.template
+# Note: env.template should be committed as a template (without real API keys)
+
+# State
+state/cursor.json
+
+# Logs
+*.log
+logs/
+
+# n8n data
+n8n_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Certificates
+cert wazuh/*.pem
+cert wazuh/*.crt
+cert thehive/*.pem
+cert thehive/*.crt
+
