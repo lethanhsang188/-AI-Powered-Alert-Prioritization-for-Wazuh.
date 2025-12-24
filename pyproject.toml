@@ -1,0 +1,184 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wazuh-alert-pipeline"
+version = "1.0.0"
+description = "AI-Powered Alert Prioritization for Wazuh - Enterprise-grade security alert processing pipeline"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "lethanhsang188", email = ""},
+]
+maintainers = [
+    {name = "lethanhsang188", email = ""},
+]
+keywords = [
+    "wazuh",
+    "security",
+    "monitoring",
+    "ai",
+    "alerts",
+    "prioritization",
+    "ids",
+    "ips",
+    "soc",
+    "threat-detection",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "requests>=2.28.0",
+    "python-dotenv>=1.0.0",
+    "urllib3>=1.26.0",
+    "flask>=2.3.0",
+    "werkzeug>=2.3.0",
+    "openai>=1.0.0",
+    "paramiko>=3.1.0",
+    "pytz>=2023.3",
+    "structlog>=23.1.0",
+    "tenacity>=8.0.0",
+    "cryptography>=41.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+    "bandit>=1.7.0",
+    "safety>=2.3.0",
+]
+docs = [
+    "mkdocs>=1.4.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocs-static-i18n>=1.0.0",
+    "mkdocs-git-revision-date-localized-plugin>=0.18.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh."
+Documentation = "https://lethanhsang188.github.io/-AI-Powered-Alert-Prioritization-for-Wazuh./"
+Repository = "https://github.com/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh."
+"Bug Reports" = "https://github.com/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh./issues"
+Changelog = "https://github.com/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh./blob/master/CHANGELOG.md"
+
+[project.scripts]
+wazuh-alert-pipeline = "bin.run_pipeline:main"
+wazuh-alert-test = "tools.test_active_response:main"
+
+[tool.setuptools]
+zip-safe = false
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 127
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 127
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "dotenv.*",
+    "urllib3.*",
+    "requests.*",
+    "openai.*",
+    "paramiko.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = [
+    "tests",
+]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "src/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "class .*\bProtocol\):",
+    "@(abc\.)?abstractmethod",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", "docs"]
+skips = ["B101", "B601"]

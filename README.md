@@ -1,8 +1,13 @@
 # AI-Powered Alert Prioritization for Wazuh
 
+[![CI/CD Pipeline](https://github.com/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh./actions/workflows/ci.yml/badge.svg)](https://github.com/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh./actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh./branch/master/graph/badge.svg)](https://codecov.io/gh/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh.)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://badge.fury.io/py/wazuh-alert-pipeline.svg)](https://pypi.org/project/wazuh-alert-pipeline/)
+[![Docker Image](https://img.shields.io/docker/pulls/lethanhsang188/wazuh-alert-pipeline)](https://hub.docker.com/r/lethanhsang188/wazuh-alert-pipeline)
 [![Wazuh](https://img.shields.io/badge/Wazuh-4.14+-green.svg)](https://wazuh.com/)
+[![Documentation](https://img.shields.io/badge/docs-mkdocs-blue)](https://lethanhsang188.github.io/-AI-Powered-Alert-Prioritization-for-Wazuh./)
 
 An enterprise-grade AI-powered security alert processing pipeline that intelligently prioritizes and responds to Wazuh alerts using advanced heuristic analysis and optional Large Language Model (LLM) triage.
 

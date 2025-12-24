@@ -1,0 +1,317 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
+    - name: Install dependencies
+      run: |
+        pip install mkdocs mkdocs-material mkdocs-static-i18n mkdocs-git-revision-date-localized-plugin
+
+    - name: Create docs structure
+      run: |
+        mkdir -p docs_site/docs
+        cp README.md docs_site/docs/index.md
+        cp docs/*.md docs_site/docs/ 2>/dev/null || true
+
+    - name: Create mkdocs.yml
+      run: |
+        cat > docs_site/mkdocs.yml << 'EOF'
+        site_name: AI-Powered Alert Prioritization for Wazuh
+        site_description: Enterprise-grade AI-powered security alert processing pipeline
+        site_author: lethanhsang188
+        site_url: https://lethanhsang188.github.io/-AI-Powered-Alert-Prioritization-for-Wazuh./
+
+        repo_name: lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh.
+        repo_url: https://github.com/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh.
+        edit_uri: edit/master/docs/
+
+        theme:
+          name: material
+          palette:
+            primary: blue
+            accent: blue
+          features:
+            - navigation.tabs
+            - navigation.sections
+            - toc.integrate
+            - search.suggest
+            - search.highlight
+            - content.tabs.link
+            - content.code.annotation
+            - content.code.copy
+
+        plugins:
+          - search
+          - git-revision-date-localized:
+              enable_creation_date: true
+
+        markdown_extensions:
+          - pymdownx.highlight:
+              anchor_linenums: true
+          - pymdownx.inlinehilite
+          - pymdownx.snippets
+          - pymdownx.superfences
+          - pymdownx.tabbed:
+              alternate_style: true
+          - admonition
+          - pymdownx.details
+          - pymdownx.superfences
+          - attr_list
+          - md_in_html
+          - pymdownx.emoji:
+              emoji_index: !!python/name:materialx.emoji.twemoji
+              emoji_generator: !!python/name:materialx.emoji.to_svg
+
+        nav:
+          - Home: index.md
+          - Setup:
+            - Quick Start: setup/quick-start.md
+            - Configuration: setup/configuration.md
+            - Docker Deployment: setup/docker.md
+          - Architecture:
+            - Overview: architecture/overview.md
+            - Components: architecture/components.md
+            - Threat Detection: architecture/threat-detection.md
+          - API Reference:
+            - REST API: api/rest-api.md
+            - Configuration: api/configuration.md
+          - Contributing:
+            - Development: contributing/development.md
+            - Testing: contributing/testing.md
+            - Guidelines: contributing/guidelines.md
+        EOF
+
+    - name: Create additional documentation pages
+      run: |
+        mkdir -p docs_site/docs/setup
+        mkdir -p docs_site/docs/architecture
+        mkdir -p docs_site/docs/api
+        mkdir -p docs_site/docs/contributing
+
+        # Quick Start
+        cat > docs_site/docs/setup/quick-start.md << 'EOF'
+        # Quick Start Guide
+
+        Get up and running with AI-Powered Alert Prioritization for Wazuh in minutes.
+
+        ## Prerequisites
+
+        - Python 3.8 or higher
+        - Wazuh 4.14+ with indexer access
+        - OpenAI API key (optional, for LLM analysis)
+
+        ## Installation
+
+        ### From PyPI
+        ```bash
+        pip install wazuh-alert-pipeline
+        ```
+
+        ### From Source
+        ```bash
+        git clone https://github.com/lethanhsang188/-AI-Powered-Alert-Prioritization-for-Wazuh..git
+        cd -AI-Powered-Alert-Prioritization-for-Wazuh.
+        pip install -r requirements.txt
+        ```
+
+        ## Configuration
+
+        1. Copy the environment template:
+        ```bash
+        cp .env.example .env
+        ```
+
+        2. Edit `.env` with your settings:
+        ```bash
+        # Required
+        WAZUH_INDEXER_URL=https://your-wazuh-indexer:9200
+        WAZUH_INDEXER_USER=admin
+        WAZUH_INDEXER_PASS=your_password
+
+        # Optional
+        OPENAI_API_KEY=sk-proj-your-key-here
+        TELEGRAM_BOT_TOKEN=your-bot-token
+        ```
+
+        ## Running
+
+        Start the pipeline:
+        ```bash
+        python bin/run_pipeline.py
+        ```
+
+        ## Verification
+
+        Check the logs and Telegram notifications to verify the system is working correctly.
+        EOF
+
+        # Configuration guide
+        cat > docs_site/docs/setup/configuration.md << 'EOF'
+        # Configuration Guide
+
+        Comprehensive configuration reference for all system components.
+
+        ## Core Settings
+
+        ### Wazuh Connection
+        - `WAZUH_INDEXER_URL`: Elasticsearch indexer URL
+        - `WAZUH_INDEXER_USER`: Indexer username
+        - `WAZUH_INDEXER_PASS`: Indexer password
+
+        ### Processing Options
+        - `TRIAGE_THRESHOLD`: Alert scoring threshold (0.0-1.0)
+        - `WAZUH_POLL_INTERVAL_SEC`: Alert polling frequency
+        - `WAZUH_MAX_LEVEL`: Maximum alert level to process
+
+        ## AI/LLM Settings
+
+        ### OpenAI Configuration
+        - `LLM_ENABLE`: Enable/disable LLM analysis
+        - `OPENAI_API_KEY`: Your OpenAI API key
+        - `LLM_MODEL`: GPT model to use (gpt-4o-mini, gpt-4, etc.)
+
+        ### Scoring Weights
+        - `HEURISTIC_WEIGHT`: Weight for rule-based scoring
+        - `LLM_WEIGHT`: Weight for LLM analysis
+
+        ## Notification Settings
+
+        ### Telegram
+        - `TELEGRAM_BOT_TOKEN`: Bot token from @BotFather
+        - `TELEGRAM_CHAT_ID`: Chat ID for notifications
+
+        ## Security Settings
+
+        ### Automated Response
+        - `ENABLE_ACTIVE_RESPONSE`: Enable automatic blocking
+        - `FAST_BLOCK_TAGS`: Tags that trigger immediate blocks
+        - `ACTIVE_RESPONSE_ALLOWLIST`: IPs to never block
+
+        ### pfSense Integration
+        - `PFSENSE_HOST`: pfSense firewall IP
+        - `PFSENSE_USER`: SSH username
+        - `PFSENSE_BLOCK_TABLE`: pf table name
+        EOF
+
+        # Architecture overview
+        cat > docs_site/docs/architecture/overview.md << 'EOF'
+        # Architecture Overview
+
+        High-level system architecture and data flow.
+
+        ## System Components
+
+        ```
+        ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+        │   Wazuh Indexer │───▶│   Alert Collector│───▶│   AI Analyzer   │
+        │   (Elasticsearch)│    │   (wazuh_client)│    │ (heuristic+LLM) │
+        └─────────────────┘    └─────────────────┘    └─────────────────┘
+               │                       │                       │
+               ▼                       ▼                       ▼
+        ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+        │   Normalization │    │   Triage Score  │    │ Notifications + │
+        │   & Enrichment  │    │   (0.0-1.0)     │    │ Auto-Response   │
+        └─────────────────┘    └─────────────────┘    └─────────────────┘
+        ```
+
+        ## Data Flow
+
+        1. **Collection**: Fetch alerts from Wazuh indexer
+        2. **Analysis**: Apply heuristic and LLM analysis
+        3. **Triage**: Score and prioritize alerts
+        4. **Response**: Send notifications and automated blocks
+
+        ## Key Features
+
+        - **Real-time Processing**: Sub-second alert analysis
+        - **Intelligent Prioritization**: AI-powered threat assessment
+        - **Automated Response**: Policy-based blocking actions
+        - **Rich Notifications**: Formatted alerts with context
+        EOF
+
+        # Contributing guidelines
+        cat > docs_site/docs/contributing/guidelines.md << 'EOF'
+        # Contributing Guidelines
+
+        How to contribute to the project effectively.
+
+        ## Code Style
+
+        - Follow PEP 8 guidelines
+        - Use type hints for all functions
+        - Write comprehensive docstrings
+        - Keep functions focused and modular
+
+        ## Testing
+
+        - Write unit tests for new features
+        - Ensure all tests pass before PR
+        - Aim for >80% code coverage
+        - Test edge cases and error conditions
+
+        ## Documentation
+
+        - Update README.md for significant changes
+        - Add docstrings to all public functions
+        - Update configuration examples if needed
+
+        ## Pull Request Process
+
+        1. Fork the repository
+        2. Create a feature branch
+        3. Make your changes with tests
+        4. Ensure all tests pass
+        5. Update documentation
+        6. Submit a pull request
+        EOF
+
+    - name: Build with MkDocs
+      run: |
+        cd docs_site
+        mkdocs build --clean
+
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: ./docs_site/site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
