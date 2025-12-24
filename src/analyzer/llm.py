@@ -1,4 +1,4 @@
-"""Optional LLM-based alert analysis."""
+"""Phân tích cảnh báo tuỳ chọn dựa trên LLM."""
 import logging
 from typing import Any, Dict, Optional
 
@@ -16,18 +16,18 @@ from src.common.llm_cache import get_llm_cache
 
 logger = logging.getLogger(__name__)
 
-# Controlled vocabulary for tags (Prompt III)
+# Danh mục từ vựng được kiểm soát cho các tag (Prompt III)
 ALLOWED_TAGS = [
     "benign_config_change",
     "suspicious_config_change",
     "ssh_bruteforce",
     "auth_bruteforce",
     "web_attack",
-    "sql_injection",      # Web-specific: SQL injection attacks
-    "xss",                # Web-specific: Cross-site scripting
-    "path_traversal",     # Web-specific: Directory traversal attacks
-    "command_injection",   # Web-specific: Command injection attacks
-    "web_scanning",       # Web-specific: Web scanning/reconnaissance
+    "sql_injection",      # Web-specific: Tấn công SQL injection
+    "xss",                # Web-specific: Cross-site scripting (XSS)
+    "path_traversal",     # Web-specific: Directory traversal
+    "command_injection",   # Web-specific: Command injection
+    "web_scanning",       # Web-specific: Quét/Recon web
     "inbound_scan",
     "lateral_movement",
     "privilege_escalation",
@@ -48,31 +48,31 @@ ALLOWED_THREAT_LEVELS = ["none", "low", "medium", "high", "critical"]
 
 def _calculate_temperature(rule_level: int) -> float:
     """
-    Calculate dynamic temperature based on rule level.
+    Tính temperature động dựa trên mức rule.
     
-    Higher rule levels (more critical) use lower temperature for more precise analysis.
-    Lower rule levels use higher temperature for more flexible interpretation.
+    Rule level cao hơn (nghiêm trọng hơn) dùng temperature thấp hơn để phân tích chính xác hơn.
+    Rule level thấp hơn dùng temperature cao hơn để cho phép diễn giải linh hoạt hơn.
     """
     if rule_level >= 12:
-        return 0.2  # Very precise for critical alerts
+        return 0.2  # Rất chính xác cho cảnh báo critical
     elif rule_level >= 9:
-        return 0.25  # Precise for high-severity alerts
+        return 0.25  # Chính xác cho cảnh báo mức cao
     elif rule_level >= 7:
-        return 0.3  # Standard temperature
+        return 0.3  # Temperature chuẩn
     else:
-        return 0.35  # Slightly more flexible for lower-severity alerts
+        return 0.35  # Linh hoạt hơn cho các mức thấp
 
 
 def triage_llm(alert_text: str, rule_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    Analyze alert using LLM (if enabled).
+    Phân tích cảnh báo bằng LLM (nếu được bật).
     
     Args:
-        alert_text: Alert message/text (may be redacted)
-        rule_context: Optional dict with rule information (id, level, description, groups, mitre)
+        alert_text: Văn bản cảnh báo (có thể đã được redacted)
+        rule_context: Dict tuỳ chọn chứa thông tin rule (id, level, description, groups, mitre)
         
     Returns:
-        Dict with keys: summary, threat_level, confidence (0.0-1.0), tags (list)
+        Dict với các khóa: summary, threat_level, confidence (0.0-1.0), tags (danh sách)
     """
     if not LLM_ENABLE:
         return {
@@ -91,7 +91,7 @@ def triage_llm(alert_text: str, rule_context: Optional[Dict[str, Any]] = None) -
             "tags": [],
         }
     
-    # Check cache first
+    # Kiểm tra cache trước
     if LLM_CACHE_ENABLE:
         cache = get_llm_cache()
         cached_result = cache.get(alert_text, rule_context)
@@ -106,14 +106,14 @@ def triage_llm(alert_text: str, rule_context: Optional[Dict[str, Any]] = None) -
             )
             return cached_result
     
-    # Extract rule context if provided
+    # Trích xuất ngữ cảnh rule nếu có
     rule_id = rule_context.get("id", "N/A") if rule_context else "N/A"
     rule_level = rule_context.get("level", 0) if rule_context else 0
     rule_description = rule_context.get("description", "") if rule_context else ""
     rule_groups = rule_context.get("groups", []) if rule_context else []
     mitre_ids = rule_context.get("mitre", {}).get("id", []) if rule_context and rule_context.get("mitre") else []
     
-    # Build rule context string with rule-specific guidance
+    # Xây dựng chuỗi ngữ cảnh rule kèm hướng dẫn theo rule
     rule_context_str = ""
     rule_specific_guidance = ""
     
@@ -130,8 +130,8 @@ def triage_llm(alert_text: str, rule_context: Optional[Dict[str, Any]] = None) -
             mitre_str = ", ".join(mitre_ids) if isinstance(mitre_ids, list) else str(mitre_ids)
             rule_context_str += f"- MITRE ATT&CK IDs: {mitre_str}\n"
         
-        # Add rule-specific guidance for critical rules
-        # NOTE: Also check for normalized attack type to ensure consistent analysis across agents
+        # Thêm hướng dẫn theo rule cho các rule quan trọng
+        # LƯU Ý: Cũng kiểm tra loại tấn công đã chuẩn hóa để đảm bảo phân tích nhất quán giữa các agent
         normalized_attack_type = rule_context.get("normalized_attack_type") if rule_context else None
         
         if rule_id == "31105" or normalized_attack_type == "xss":
@@ -176,12 +176,12 @@ def triage_llm(alert_text: str, rule_context: Optional[Dict[str, Any]] = None) -
 - Required tags: ["web_attack"]
 """
     
-    # Increase alert text limit for better context (was 500, now 1200)
+    # Tăng giới hạn văn bản cảnh báo để có ngữ cảnh tốt hơn (từ 500 -> 1200)
     alert_text_truncated = alert_text[:1200]
     if len(alert_text) > 1200:
         alert_text_truncated += "\n[... truncated ...]"
     
-    # Prepare enhanced prompt
+    # Chuẩn bị prompt nâng cao
     prompt = f"""
 You are a senior SOC (Security Operations Center) analyst. 
 
@@ -288,7 +288,7 @@ Rules:
             "Content-Type": "application/json",
         })
         
-        # Calculate dynamic temperature based on rule level
+        # Tính temperature động dựa trên rule level
         rule_level = rule_context.get("level", 0) if rule_context else 0
         temperature = _calculate_temperature(rule_level)
         
@@ -324,7 +324,7 @@ Rules:
             timeout=LLM_TIMEOUT_SEC,
         )
         
-        # Log error details before raising
+        # Ghi log chi tiết lỗi trước khi ném ngoại lệ
         if response.status_code != 200:
             try:
                 error_data = response.json()
@@ -372,17 +372,17 @@ Rules:
             }
         )
         
-        # Parse JSON response with error handling
+        # Phân tích phản hồi JSON với xử lý lỗi
         import json
         import re
         
         try:
-            # With response_format: {"type": "json_object"}, model should return valid JSON
-            # But keep regex fallback for edge cases
+            # Với response_format: {"type": "json_object"}, model sẽ trả về JSON hợp lệ
+            # Nhưng vẫn giữ fallback regex cho các trường hợp méo mó
             try:
                 result = json.loads(content)
             except json.JSONDecodeError:
-                # Fallback: Try to extract JSON from response (in case model adds extra text)
+                # Fallback: Thử rút JSON từ phản hồi (trong trường hợp model thêm văn bản ngoài JSON)
                 json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content, re.DOTALL)
                 if json_match:
                     result = json.loads(json_match.group(0))
@@ -398,13 +398,13 @@ Rules:
                 "tags": [],
             }
         
-        # Validate and normalize threat_level
+        # Xác thực và chuẩn hoá threat_level
         threat_level = result.get("threat_level", "medium")
         if threat_level not in ALLOWED_THREAT_LEVELS:
             logger.warning(f"Invalid threat_level: {threat_level}, using 'medium'")
             threat_level = "medium"
         
-        # Validate and normalize confidence
+        # Xác thực và chuẩn hoá confidence
         confidence = result.get("confidence", 0.0)
         try:
             confidence = float(confidence)
@@ -413,7 +413,7 @@ Rules:
             logger.warning(f"Invalid confidence value: {confidence}, using 0.0")
             confidence = 0.0
         
-        # Validate and filter tags
+        # Xác thực và lọc tags
         tags = result.get("tags", [])
         if not isinstance(tags, list):
             tags = []

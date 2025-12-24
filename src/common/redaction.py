@@ -1,4 +1,4 @@
-"""PII redaction before LLM processing."""
+"""Xoá thông tin nhận dạng cá nhân (PII) trước khi xử lý bởi LLM."""
 import re
 from typing import Dict, Tuple
 
@@ -17,7 +17,7 @@ PATTERNS = [
 
 
 class Redactor:
-    """Redacts PII from text while maintaining mapping."""
+    """Xoá PII khỏi văn bản đồng thời giữ mapping để có thể phục hồi."""
     
     def __init__(self):
         self.mapping: Dict[str, str] = {}

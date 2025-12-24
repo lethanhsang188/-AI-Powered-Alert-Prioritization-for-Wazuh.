@@ -7,7 +7,7 @@ from src.common.config import SOC_MIN_LEVEL, SOC_MAX_LEVEL, INCLUDE_RULE_IDS, IN
 
 logger = logging.getLogger(__name__)
 
-# Common benign signatures (can be extended via config)
+# Các signature lành tính phổ biến (có thể mở rộng qua config)
 BENIGN_SIGNATURES = [
     "health-check",
     "monitoring",
@@ -16,7 +16,7 @@ BENIGN_SIGNATURES = [
     "status-check",
 ]
 
-# Common benign user agents
+# Các user agent lành tính phổ biến
 BENIGN_USER_AGENTS = [
     "healthcheck",
     "monitoring",
@@ -35,14 +35,14 @@ def _is_internal_ip(ip: str) -> bool:
         addr = ip_address(ip)
         return addr.is_private or addr.is_loopback or addr.is_link_local
     except (ValueError, AddressValueError):
-        # Fallback to simple check
+        # Fallback: kiểm tra đơn giản
         parts = ip.split(".")
         if len(parts) != 4:
             return False
         try:
             first = int(parts[0])
             second = int(parts[1])
-            # RFC 1918 private ranges
+            # Dải IP private theo RFC 1918
             if first == 10:
                 return True
             if first == 172 and 16 <= second <= 31:
@@ -79,7 +79,7 @@ def analyze_fp_risk(alert: Dict[str, Any], correlation_info: Optional[Dict[str, 
     noise_signals: List[str] = []
     allowlist_hit = False
     
-    # Extract fields
+    # Trích xuất các trường
     rule = alert.get("rule", {})
     agent = alert.get("agent", {})
     http_context = alert.get("http") or {}
@@ -87,51 +87,98 @@ def analyze_fp_risk(alert: Dict[str, Any], correlation_info: Optional[Dict[str, 
     source = alert.get("source", {})
     src_ip = source.get("ip", "") or alert.get("srcip", "")
     
-    # Check 1: Internal IP + HTTP 404 = Likely false positive from internal scan
+    # Special handling for pfSense Suricata rule 20101: inspect firedtimes, full_log, UA, action, payload indicators
+    try:
+        rule_id_val = str(rule.get("id", "") or "")
+    except Exception:
+        rule_id_val = ""
+    try:
+        firedtimes_val = int(rule.get("firedtimes", 0) or 0)
+    except Exception:
+        firedtimes_val = 0
+    # raw/full log may be in different places depending on normalization
+    raw_full_log = ""
+    try:
+        raw_full_log = (alert.get("raw", {}) or {}).get("full_log", "") or (alert.get("full_data", {}) or {}).get("full_log", "") or (alert.get("raw_json", {}) or {}).get("full_log", "") or ""
+    except Exception:
+        raw_full_log = ""
+    http_ua = (http_context.get("user_agent") or "").lower() if http_context else ""
+    suricata_action = (suricata_alert.get("action") or "").lower() if suricata_alert else ""
+
+    # If this is the pfSense Suricata IDS rule 20101, do targeted checks to avoid false negatives
+    if rule_id_val == "20101":
+        indicators_found: List[str] = []
+        # Keywords to consider as strong attack indicators
+        indicator_keywords = [
+            "sqlmap", "union select", "select ", " or ", "sleep(", "benchmark(", "' or '1'='1",
+            "xss", "cross-site", "csrf", "syn flood", "synflood", "synn", "brute", "hydra", "ssh", "sql injection", "sqli"
+        ]
+        search_text = " ".join([raw_full_log or "", http_ua or "", suricata_action or "", str(alert.get("message", "") or "")]).lower()
+        for kw in indicator_keywords:
+            if kw in search_text:
+                indicators_found.append(f"kw:{kw}")
+
+        # firedtimes threshold - repeated firings increase confidence
+        if firedtimes_val and firedtimes_val >= 3:
+            indicators_found.append(f"firedtimes:{firedtimes_val}")
+
+        # external source indicator
+        if src_ip and not _is_internal_ip(src_ip):
+            indicators_found.append("external_src")
+
+        # If any indicators found -> treat as likely TRUE positive (do not add FP reasons)
+        if indicators_found:
+            noise_signals.append("20101_indicators:" + ",".join(indicators_found))
+        else:
+            # No clear indicators -> mark as potential noise but still allow analysis downstream
+            fp_reasons.append("20101_no_indicators_possible_noise")
+            noise_signals.append("20101_no_indicators")
+    
+    # Kiểm tra 1: IP nội bộ + HTTP 404 = Có thể là false positive từ internal scan
     if src_ip and _is_internal_ip(src_ip):
         if http_context and http_context.get("status") == "404":
-            fp_reasons.append("Internal IP with HTTP 404 (likely internal scan)")
+            fp_reasons.append("IP nội bộ với HTTP 404 (có thể là internal scan)")
             noise_signals.append("internal_scan_404")
     
-    # Check 2: Benign signatures
+    # Kiểm tra 2: Signature lành tính
     signature = suricata_alert.get("signature", "") if suricata_alert else ""
     if signature:
         signature_lower = signature.lower()
         for benign_sig in BENIGN_SIGNATURES:
             if benign_sig.lower() in signature_lower:
-                fp_reasons.append(f"Benign signature pattern: {benign_sig}")
+                fp_reasons.append(f"Mẫu signature lành tính: {benign_sig}")
                 noise_signals.append(f"benign_signature_{benign_sig}")
     
-    # Check 3: Benign user agents
+    # Kiểm tra 3: User agent lành tính
     user_agent = http_context.get("user_agent", "") if http_context else ""
     if user_agent:
         user_agent_lower = user_agent.lower()
         for benign_ua in BENIGN_USER_AGENTS:
             if benign_ua.lower() in user_agent_lower:
-                fp_reasons.append(f"Benign user agent: {benign_ua}")
+                fp_reasons.append(f"User agent lành tính: {benign_ua}")
                 noise_signals.append(f"benign_user_agent_{benign_ua}")
     
-    # Check 4: Repetition (same signature from same source in short time)
+    # Kiểm tra 4: Lặp lại (cùng signature từ cùng nguồn trong thời gian ngắn)
     if correlation_info and correlation_info.get("is_correlated"):
         group_size = correlation_info.get("group_size", 1)
         if group_size >= 10:
-            fp_reasons.append(f"High repetition: {group_size} alerts from same source (possible noise)")
+            fp_reasons.append(f"Lặp lại cao: {group_size} alerts từ cùng nguồn (có thể là noise)")
             noise_signals.append("high_repetition")
         elif group_size >= 5:
-            fp_reasons.append(f"Moderate repetition: {group_size} alerts from same source")
+            fp_reasons.append(f"Lặp lại vừa: {group_size} alerts từ cùng nguồn")
             noise_signals.append("moderate_repetition")
     
-    # Check 5: Cron/Job patterns (if message contains cron keywords)
+    # Kiểm tra 5: Mẫu Cron/Job (nếu message chứa từ khóa cron)
     message = alert.get("message", "")
     if message:
         message_lower = message.lower()
         cron_keywords = ["cron", "scheduled task", "job", "at job"]
         for keyword in cron_keywords:
             if keyword in message_lower:
-                fp_reasons.append(f"Cron/job pattern detected: {keyword}")
+                fp_reasons.append(f"Phát hiện mẫu cron/job: {keyword}")
                 noise_signals.append("cron_job_pattern")
     
-    # Determine FP risk level
+    # Xác định mức độ rủi ro FP
     fp_risk = "LOW"
     if len(fp_reasons) >= 3 or any("high_repetition" in ns for ns in noise_signals):
         fp_risk = "HIGH"

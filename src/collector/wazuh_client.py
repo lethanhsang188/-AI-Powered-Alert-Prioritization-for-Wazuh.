@@ -1,4 +1,4 @@
-"""Wazuh 4.14.0 API client for alert collection."""
+"""Client API Wazuh 4.14.0 để thu thập cảnh báo."""
 import json
 import logging
 import os
@@ -10,6 +10,8 @@ from urllib.parse import urlparse, urlunparse
 import urllib3
 from requests.auth import HTTPBasicAuth
 from requests.exceptions import HTTPError, RequestException
+import time
+import threading
 
 from src.common.config import (
     BASE_DIR,
@@ -43,6 +45,55 @@ from src.common.timezone import utc_iso_to_local
 
 logger = logging.getLogger(__name__)
 
+class _AlertThrottle:
+    """
+    Simple in-memory throttle/count window for alerts.
+    Tracks counts per key with TTL (window_seconds). Not persistent across restarts.
+    Thread-safe for simple concurrent use.
+    """
+    def __init__(self):
+        self._store = {}  # key -> (count, expiry_ts)
+        self._lock = threading.Lock()
+
+    def increment_and_get(self, key: str, window_seconds: int = 300) -> int:
+        """
+        Increment counter for key and return new count.
+        Resets counter when expiry passed.
+        """
+        now = time.time()
+        with self._lock:
+            entry = self._store.get(key)
+            if entry:
+                count, expiry = entry
+                if now > expiry:
+                    # expired -> reset
+                    count = 1
+                    expiry = now + window_seconds
+                else:
+                    count = count + 1
+            else:
+                count = 1
+                expiry = now + window_seconds
+
+            self._store[key] = (count, expiry)
+            return count
+
+    def get_count(self, key: str) -> int:
+        with self._lock:
+            entry = self._store.get(key)
+            if not entry:
+                return 0
+            count, expiry = entry
+            if time.time() > expiry:
+                # expired
+                self._store.pop(key, None)
+                return 0
+            return count
+
+    def reset(self, key: str) -> None:
+        with self._lock:
+            self._store.pop(key, None)
+
 
 class WazuhClient:
     """Client for Wazuh 4.14.0 API."""
@@ -53,11 +104,11 @@ class WazuhClient:
         self.indexer_url = WAZUH_INDEXER_URL.rstrip("/")
         self.alerts_index = WAZUH_ALERTS_INDEX
 
-        # Setup API session
+        # Thiết lập session API
         self.session = RetrySession()
         self._setup_api_session()
 
-        # Setup indexer session
+        # Thiết lập session indexer
         self.indexer_session = RetrySession()
         self._setup_indexer_session()
 
@@ -73,12 +124,17 @@ class WazuhClient:
                 "min_level": WAZUH_MIN_LEVEL,
             },
         )
+        # In-memory throttle to limit noisy alerts (per src_ip+rule) for specific agents/rules
+        # Structure: simple counter with expiry to enforce windowed caps (not persisted across restarts)
+        self._alert_throttle = _AlertThrottle()
+        # Track which aggregate suppression notices we've already emitted per key to avoid floods
+        self._suppression_notice_emitted = set()
 
     def _setup_api_session(self) -> None:
         """Configure API session with authentication and SSL."""
         self._apply_ssl_config(self.session, WAZUH_API_VERIFY_SSL, "api")
 
-        # Try token auth first, fallback to basic auth
+        # Thử token auth trước, fallback về basic auth nếu không có
         if WAZUH_API_TOKEN:
             self._apply_bearer_token(WAZUH_API_TOKEN, source="environment variable")
         elif WAZUH_API_USER and WAZUH_API_PASS:
@@ -130,7 +186,7 @@ class WazuhClient:
                 )
                 verify_value = True
 
-        # Fix: Use the session parameter, not self.session
+        # Sửa: Sử dụng tham số session, không dùng self.session
         session.verify = verify_value
 
         if verify_value is False:
@@ -144,7 +200,7 @@ class WazuhClient:
                     "Wazuh indexer SSL verification disabled. Enable WAZUH_INDEXER_VERIFY_SSL for production deployments."
                 )
         elif isinstance(verify_value, str):
-            # Verify with custom cert file
+            # Xác thực với file chứng chỉ tùy chỉnh
             if not os.path.exists(verify_value) or not os.path.isfile(verify_value):
                 logger.error(
                     "Wazuh certificate file not found: %s",
@@ -174,12 +230,12 @@ class WazuhClient:
     def _apply_bearer_token(self, token: str, *, source: str) -> None:
         """Apply bearer token to session headers."""
         self.session.headers.update({"Authorization": f"Bearer {token}"})
-        # Ensure basic auth is cleared if previously configured
+        # Đảm bảo basic auth bị xóa nếu trước đó đã cấu hình
         self.session.auth = None
         logger.info("Using Wazuh API token authentication (%s)", source)
 
     def _fallback_basic_auth(self) -> None:
-        """Fallback to HTTP Basic authentication."""
+        """Fallback: chuyển sang HTTP Basic authentication."""
         from requests.auth import HTTPBasicAuth
 
         self.session.auth = HTTPBasicAuth(WAZUH_API_USER, WAZUH_API_PASS)
@@ -297,7 +353,7 @@ class WazuhClient:
             addr = ip_address(ip)
             return addr.is_private or addr.is_loopback or addr.is_link_local
         except (ValueError, AddressValueError):
-            # Fallback to simple check
+            # Fallback: kiểm tra đơn giản
             parts = ip.split(".")
             if len(parts) != 4:
                 return False
@@ -335,26 +391,26 @@ class WazuhClient:
             Tuple of (should_process, reason)
         """
         if level_class == "high":
-            # High level: Check for false positive indicators
+            # Mức Cao: Kiểm tra các chỉ dấu false positive
             http_context = alert.get("http", {})
             source = alert.get("source", {})
             src_ip = source.get("ip", "") or alert.get("srcip", "")
             
-            # Filter if: Internal IP + HTTP 404 (likely false positive from internal scan)
+            # Lọc nếu: IP nội bộ + HTTP 404 (có thể là false positive do internal scan)
             if src_ip and self._is_internal_ip(src_ip):
                 if http_context and http_context.get("status") == "404":
                     return False, "Internal IP with HTTP 404 (likely false positive from internal scan)"
             
-            # Always process high-level alerts (but can filter obvious false positives)
+            # Luôn xử lý các cảnh báo mức cao (nhưng có thể gắn nhãn các false positive rõ ràng)
             return True, "High-level alert passed filter"
         
         elif level_class == "medium":
-            # Medium level: Check for important indicators
+            # Mức Trung bình: Kiểm tra các chỉ dấu quan trọng
             suricata_alert = alert.get("suricata_alert", {})
             http_context = alert.get("http", {})
             rule_groups = alert.get("rule", {}).get("groups", [])
             
-            # Must have at least one indicator
+            # Phải có ít nhất một chỉ dấu
             has_indicators = (
                 (suricata_alert and isinstance(suricata_alert.get("severity"), (int, float)) and suricata_alert.get("severity", 0) >= 2) or
                 (http_context and http_context.get("url")) or
@@ -367,7 +423,7 @@ class WazuhClient:
                 return False, "Medium-level alert without important indicators"
         
         else:  # low
-            # Low level: Strict filtering - must have multiple indicators
+            # Mức Thấp: Lọc chặt - phải có nhiều chỉ dấu
             suricata_alert = alert.get("suricata_alert", {})
             http_context = alert.get("http", {})
             flow = alert.get("flow", {})
@@ -379,19 +435,19 @@ class WazuhClient:
             if suricata_alert and isinstance(suricata_alert.get("severity"), (int, float)) and suricata_alert.get("severity", 0) >= 2:
                 indicator_count += 1
             
-            # HTTP context
+            # Ngữ cảnh HTTP
             if http_context and http_context.get("url"):
                 indicator_count += 1
             
-            # Flow context
+            # Ngữ cảnh flow
             if flow and flow.get("src_ip"):
                 indicator_count += 1
             
-            # Important rule groups
+            # Các nhóm rule quan trọng
             if any(group in rule_groups for group in ["suricata", "web_attack", "ids", "attack", "web_scan", "recon"]):
                 indicator_count += 1
             
-            # Need at least 2 indicators for low-level alerts
+            # Cần ít nhất 2 chỉ dấu cho các cảnh báo mức thấp
             if indicator_count >= 2:
                 return True, f"Low-level alert with {indicator_count} indicators"
             else:
@@ -410,25 +466,25 @@ class WazuhClient:
         Returns:
             Tuple of (should_process, reason)
         """
-        # Extract fields
+        # Trích xuất các trường
         http_context = alert.get("http", {})
         suricata_alert = alert.get("suricata_alert", {})
         source = alert.get("source", {})
         src_ip = source.get("ip", "") or alert.get("srcip", "")
         
-        # Filter 1: Internal IP + HTTP 404 = Likely false positive
+        # Lọc 1: IP nội bộ + HTTP 404 = Có khả năng false positive
         if src_ip and self._is_internal_ip(src_ip):
             if http_context and http_context.get("status") == "404":
                 return False, "Internal IP with HTTP 404 (likely false positive)"
         
-        # Filter 2: Suricata action = "blocked" = Already mitigated (still process but note)
+        # Lọc 2: Suricata action = \"blocked\" = Đã được giảm thiểu (vẫn xử lý nhưng chú ý)
         if suricata_alert and suricata_alert.get("action") == "blocked":
             return True, "Suricata blocked (already mitigated, but processing for awareness)"
         
-        # Filter 3: Check for attack indicators in low-level alerts
+        # Lọc 3: Kiểm tra chỉ dấu tấn công trong các cảnh báo mức thấp
         rule_level = alert.get("rule", {}).get("level", 0)
         if rule_level < 7:
-            # Helper to convert severity to int (handles string "2" -> int 2)
+            # Hàm trợ giúp chuyển severity sang int (xử lý string \"2\" -> int 2)
             def _to_int_safe(value):
                 if isinstance(value, (int, float)):
                     return int(value)
@@ -439,44 +495,54 @@ class WazuhClient:
                         return 0
                 return 0
             
-            # Check Suricata severity (convert string to int if needed)
+            # Kiểm tra mức độ Suricata (chuyển string sang int nếu cần)
             suricata_severity = 0
             if suricata_alert:
                 severity_raw = suricata_alert.get("severity")
                 suricata_severity = _to_int_safe(severity_raw)
             
-            # Check Suricata category
+            # Kiểm tra category Suricata
             suricata_category = ""
             if suricata_alert:
                 suricata_category = (suricata_alert.get("category", "") or "").lower()
             
-            # Check Suricata signature
+            # Kiểm tra signature Suricata
             suricata_signature = ""
             if suricata_alert:
                 suricata_signature = (suricata_alert.get("signature", "") or "").lower()
             
-            # Check event_type
+            # Kiểm tra event_type
             event_type = alert.get("event_type", "").lower()
             
-            # Check URL patterns (expanded to include CSRF and other attacks)
-            url_patterns = ["sqli", "xss", "union", "select", "exec", "cmd", "shell", "csrf", "cross-site", "path", "traversal", "rce", "injection"]
+            # Kiểm tra mẫu URL (mở rộng để bao gồm tất cả loại tấn công)
+            url_patterns = [
+                "sqli", "xss", "union", "select", "exec", "cmd", "shell", "csrf", "cross-site",
+                "path", "traversal", "rce", "injection", "lfi", "file inclusion",
+                "upload", "webshell", "etc/passwd", "proc/self", "../", "..\\",
+                "include=", "file=", "cmd=", "exec="
+            ]
             url_has_pattern = False
             if http_context and http_context.get("url"):
                 url_lower = http_context.get("url", "").lower()
                 url_has_pattern = any(pattern in url_lower for pattern in url_patterns)
             
-            # Check user agent for attack tools
+            # Kiểm tra user agent để phát hiện công cụ tấn công
             user_agent_has_tool = False
             if http_context and http_context.get("user_agent"):
                 user_agent_lower = http_context.get("user_agent", "").lower()
                 attack_tools = ["sqlmap", "nmap", "nikto", "burp", "metasploit", "w3af", "acunetix"]
                 user_agent_has_tool = any(tool in user_agent_lower for tool in attack_tools)
             
-            # Attack indicators: severity >= 2, attack category, attack signature, event_type=alert, URL patterns, or attack tools
+            # Chỉ dấu tấn công: severity >= 2, category tấn công, signature tấn công, event_type=alert, mẫu URL, hoặc công cụ tấn công
+            attack_signature_patterns = [
+                "xss", "sql", "sqli", "csrf", "exploit", "injection", "traversal", "rce", "command",
+                "brute", "dos", "ddos", "lfi", "file inclusion", "file upload", "webshell",
+                "syn flood", "synflood", "flood", "ssh", "authentication failed", "login attempt"
+            ]
             has_attack_indicators = (
                 (suricata_severity >= 2) or
                 (suricata_category and any(cat in suricata_category for cat in ["web application attack", "exploit", "malware", "trojan", "virus", "worm", "dos", "network scan", "reconnaissance"])) or
-                (suricata_signature and any(pattern in suricata_signature for pattern in ["xss", "sql", "sqli", "csrf", "exploit", "injection", "traversal", "rce", "command", "brute", "dos"])) or
+                (suricata_signature and any(pattern in suricata_signature.lower() for pattern in attack_signature_patterns)) or
                 (event_type == "alert") or
                 url_has_pattern or
                 user_agent_has_tool
@@ -494,7 +560,7 @@ class WazuhClient:
 
         data_section = raw.get("data", {}) if isinstance(raw.get("data", {}), dict) else {}
 
-        # ---- Core network fields (SOC 5-tuple)
+        # ---- Trường mạng cốt lõi (Bộ 5-tuple của SOC)
         src_ip = data_section.get("src_ip", "") or ""
         src_port = data_section.get("src_port", "") or ""
         dest_ip = data_section.get("dest_ip", "") or ""
@@ -506,7 +572,7 @@ class WazuhClient:
         flow_id = data_section.get("flow_id", "") or ""
         tx_id = data_section.get("tx_id", "") or ""
 
-        # ---- Flow context (very important to avoid attacker/victim inversion)
+        # ---- Ngữ cảnh flow (rất quan trọng để tránh nhầm lẫn attacker/victim)
         flow = data_section.get("flow", {}) if isinstance(data_section.get("flow", {}), dict) else {}
         flow_src_ip = flow.get("src_ip", "") or ""
         flow_src_port = flow.get("src_port", "") or ""
@@ -518,7 +584,7 @@ class WazuhClient:
         flow_bytes_toclient = flow.get("bytes_toclient", "")
         flow_start = flow.get("start", "") or ""
 
-        # ---- HTTP context
+        # ---- Ngữ cảnh HTTP
         http_context = None
         http_data = data_section.get("http", {}) if isinstance(data_section.get("http", {}), dict) else {}
         if http_data:
@@ -530,13 +596,13 @@ class WazuhClient:
                 "status": http_data.get("status", ""),
                 "hostname": http_data.get("hostname", ""),
                 "protocol": http_data.get("protocol", ""),
-                # extra SOC-useful fields present in your sample
+                # các trường hữu ích cho SOC có trong mẫu của bạn
                 "redirect": http_data.get("redirect", ""),
                 "content_type": http_data.get("http_content_type", ""),
                 "length": http_data.get("length", ""),
             }
 
-        # ---- Suricata alert context
+        # ---- Ngữ cảnh cảnh báo Suricata
         suricata_alert = None
         alert_data = data_section.get("alert", {}) if isinstance(data_section.get("alert", {}), dict) else {}
         if alert_data:
@@ -551,6 +617,7 @@ class WazuhClient:
             }
 
         # ---- metadata (http anomaly count)
+        # ---- metadata (số lượng bất thường HTTP)
         metadata = data_section.get("metadata", {}) if isinstance(data_section.get("metadata", {}), dict) else {}
         flowints = metadata.get("flowints", {}) if isinstance(metadata.get("flowints", {}), dict) else {}
         http_anomaly_count = ""
@@ -558,35 +625,35 @@ class WazuhClient:
         if http_anomaly is not None:
             http_anomaly_count = http_anomaly
 
-        # ---- event_type for pfSense filtering
+        # ---- event_type cho lọc pfSense
         event_type = data_section.get("event_type", "")
 
-        # ---- choose a robust "srcip" for pipeline compatibility
-        # Prefer flow.src_ip if present (often the real client), else data.src_ip
+        # ---- Chọn trường \"srcip\" vững chắc để tương thích pipeline
+        # Ưu tiên flow.src_ip nếu có (thường là client thực), nếu không thì data.src_ip
         normalized_srcip = flow_src_ip or src_ip or raw.get("srcip", "")
         
-        # ---- Extract additional SOC-required fields
-        # event_id: from _id (if available in hit metadata)
+        # ---- Trích xuất các trường bổ sung cần cho SOC
+        # event_id: từ _id (nếu có trong metadata của hit)
         event_id = raw.get("_id") or raw.get("id", "")
         
-        # index: from _index (if available)
+        # index: từ _index (nếu có)
         index = raw.get("_index", "")
         
-        # manager: extract manager.name
+        # manager: trích manager.name
         manager = raw.get("manager", {})
         manager_name = manager.get("name", "") if isinstance(manager, dict) else ""
         
-        # decoder: extract decoder.name
+        # decoder: trích decoder.name
         decoder = raw.get("decoder", {})
         decoder_name = decoder.get("name", "") if isinstance(decoder, dict) else ""
         
-        # location: extract location field
+        # location: trích trường location
         location = raw.get("location", "")
         
-        # full_data: keep entire _source.data section
+        # full_data: giữ toàn bộ phần _source.data
         full_data = data_section.copy() if data_section else {}
         
-        # tags: derive from rule.groups, data.alert.category, signature, etc.
+        # tags: suy ra từ rule.groups, data.alert.category, signature, v.v.
         tags = []
         rule_groups = raw.get("rule", {}).get("groups", [])
         if isinstance(rule_groups, list):
@@ -596,7 +663,7 @@ class WazuhClient:
             if category and category not in tags:
                 tags.append(category.lower().replace(" ", "_"))
         if suricata_alert and suricata_alert.get("signature"):
-            # Extract key words from signature for tagging
+            # Trích các từ khoá từ signature để gắn tag
             signature = suricata_alert.get("signature", "").lower()
             if "sql" in signature or "sqli" in signature:
                 if "sql_injection" not in tags:
@@ -605,14 +672,14 @@ class WazuhClient:
                 if "xss" not in tags:
                     tags.append("xss")
         
-        # raw_json: keep entire _source (for evidence/deep-dive)
+        # raw_json: giữ toàn bộ _source (cho bằng chứng / phân tích sâu)
         raw_json = raw.copy()
 
         return {
             "@timestamp": timestamp,
             "@timestamp_local": localized_ts or "",
             
-            # SOC-required identity fields
+            # Các trường nhận dạng bắt buộc cho SOC
             "event_id": event_id,
             "index": index,
             "manager": {"name": manager_name} if manager_name else {},
@@ -622,12 +689,12 @@ class WazuhClient:
             "agent": raw.get("agent", {}),
             "rule": raw.get("rule", {}),
 
-            # compatibility fields used by pipeline today
+            # Các trường tương thích đang được pipeline sử dụng
             "srcip": normalized_srcip,
             "user": raw.get("user", ""),
             "message": raw.get("message", ""),
 
-            # enriched SOC fields
+            # Các trường SOC đã được làm giàu
             "src_ip": src_ip, "src_port": src_port,
             "dest_ip": dest_ip, "dest_port": dest_port,
             "proto": proto, "app_proto": app_proto,
@@ -649,11 +716,11 @@ class WazuhClient:
 
             "event_type": event_type,
             
-            # SOC-required data fields
+            # Các trường dữ liệu bắt buộc cho SOC
             "full_data": full_data,
             "tags": tags,
 
-            # keep full raw for deep-dive / evidence
+            # Giữ toàn bộ raw cho phân tích sâu / làm bằng chứng
             "raw": raw,
             "raw_json": raw_json,  # Explicit raw_json field for LLM context
         }
@@ -672,30 +739,34 @@ class WazuhClient:
 
         size = WAZUH_PAGE_LIMIT if WAZUH_PAGE_LIMIT > 0 else 200
         
-        # SOC-GRADE FILTERING: Three-tier approach
-        # Tier 1: Include alerts with level [SOC_MIN_LEVEL..SOC_MAX_LEVEL] AND rule.id in INCLUDE_RULE_IDS or starts with INCLUDE_RULE_ID_PREFIX
-        # Tier 2: Always include alerts with level >= ALWAYS_REEVALUATE_LEVEL_GTE (for AI re-evaluation)
-        # Tier 3: Include alerts with attack indicators in fields (data.alert.category, data.alert.signature, etc.)
-        #         This ensures we don't miss real attacks even if they don't match rule IDs
-        # This ensures:
-        # - Custom rules (e.g., 100100) with level 3-7 are included
-        # - All high-level alerts (>=7) are always included for AI re-evaluation
-        # - Real attacks detected by fields/content are included (prevents false negatives)
-        # - No alerts are silently dropped
+        # LỌC THEO MỨC ĐỘ SOC-GRADE: Phương pháp 3 tầng
+        # Tầng 1: Bao gồm alerts có mức [SOC_MIN_LEVEL..SOC_MAX_LEVEL] VÀ rule.id thuộc INCLUDE_RULE_IDS hoặc bắt đầu bằng INCLUDE_RULE_ID_PREFIX
+        # Tầng 2: Luôn bao gồm alerts có mức >= ALWAYS_REEVALUATE_LEVEL_GTE (để AI đánh giá lại)
+        # Tầng 3: Bao gồm alerts có chỉ báo tấn công trong trường (data.alert.category, data.alert.signature, v.v.)
+        #         Điều này đảm bảo không bỏ sót tấn công thật ngay cả khi không khớp rule ID
+        # Điều này đảm bảo:
+        # - Các rule tuỳ chỉnh (ví dụ: 100100) với mức 3-7 được bao gồm
+        # - Tất cả cảnh báo mức cao (>=7) luôn được bao gồm để AI đánh giá lại
+        # - Các tấn công thật được phát hiện qua trường/nội dung được bao gồm (ngăn ngừa false negatives)
+        # - Không có cảnh báo nào bị bỏ qua một cách im lặng
         
-        # Build rule ID filters for Tier 1
+        # Xây dựng bộ lọc rule ID cho Tầng 1
         rule_id_filters = []
         if INCLUDE_RULE_IDS:
             rule_id_filters.append({"terms": {"rule.id": INCLUDE_RULE_IDS}})
         if INCLUDE_RULE_ID_PREFIX:
-            # Use prefix query for rule IDs starting with prefix
+            # Sử dụng truy vấn prefix cho các rule ID bắt đầu bằng tiền tố
             rule_id_filters.append({"prefix": {"rule.id": INCLUDE_RULE_ID_PREFIX}})
+        # Ensure pfSense specific important rule(s) are always included to avoid false negatives
+        if agent_id == "002":
+            # Force include rule 20101 (Suricata/snort IDS event) for pfSense agent
+            rule_id_filters.append({"terms": {"rule.id": ["20101"]}})
         
-        # Build attack indicator filters for Tier 3
-        # These detect real attacks from fields/content, not just rule IDs
+        # Xây dựng bộ lọc chỉ báo tấn công cho Tầng 3
+        # Những bộ lọc này phát hiện tấn công thực sự dựa trên trường/nội dung, không chỉ dựa vào rule ID
         attack_indicator_filters = []
         
-        # Attack categories (Suricata/Wazuh alert categories)
+        # Các hạng mục tấn công (category cảnh báo Suricata/Wazuh)
         attack_categories = [
             "Web Application Attack",
             "Attempted Information Leak",
@@ -715,21 +786,33 @@ class WazuhClient:
                 "terms": {"data.alert.category": attack_categories}
             })
         
-        # Attack keywords in signature (case-insensitive via wildcard)
+        # Các từ khóa tấn công trong signature (không phân biệt hoa thường, sử dụng wildcard)
         attack_signature_keywords = [
+            # Tấn công web
             "*XSS*", "*xss*", "*Cross-Site*", "*cross-site*",
             "*SQL*", "*sqli*", "*SQL Injection*", "*sql injection*",
             "*CSRF*", "*csrf*", "*Cross-Site Request Forgery*", "*cross-site request forgery*",
-            "*Exploit*", "*exploit*", "*L2-Exploit*",
             "*Command Injection*", "*command injection*",
             "*Path Traversal*", "*path traversal*",
+            "*Local File Inclusion*", "*local file inclusion*", "*LFI*", "*lfi*",
+            "*File Inclusion*", "*file inclusion*",
+            "*File Upload*", "*file upload*", "*webshell*", "*Webshell*",
             "*Remote Code Execution*", "*RCE*",
-            "*File Upload*", "*file upload*",
-            "*Brute Force*", "*brute force*",
-            "*DoS*", "*DDoS*",
+            # Exploit
+            "*Exploit*", "*exploit*", "*L2-Exploit*",
+            # Brute force
+            "*Brute Force*", "*brute force*", "*Bruteforce*", "*bruteforce*",
+            "*SSH Brute*", "*ssh brute*", "*SSH Bruteforce*", "*ssh bruteforce*",
+            "*Authentication Failed*", "*authentication failed*",
+            "*Login Attempt*", "*login attempt*",
+            # DoS/DDoS
+            "*DoS*", "*DDoS*", "*Denial of Service*", "*denial of service*",
+            "*SYN Flood*", "*syn flood*", "*SYNFlood*", "*synflood*",
+            "*TCP SYN Flood*", "*tcp syn flood*",
+            "*Flood Attack*", "*flood attack*",
         ]
         if attack_signature_keywords:
-            # Use wildcard queries for signature matching
+            # Sử dụng truy vấn wildcard để khớp signature
             signature_wildcards = [
                 {"wildcard": {"data.alert.signature": keyword}} for keyword in attack_signature_keywords
             ]
@@ -740,14 +823,14 @@ class WazuhClient:
                 }
             })
         
-        # Suricata alerts (event_type = "alert" indicates IDS/IPS detection)
+        # Cảnh báo Suricata (event_type = "alert" cho thấy phát hiện bởi IDS/IPS)
         attack_indicator_filters.append({
             "term": {"data.event_type": "alert"}
         })
         
-        # Build main filter with three tiers
+        # Xây dựng bộ lọc chính với ba tầng
         tier_filters = [
-            # Tier 1: Level 3-7 with custom rule IDs
+            # Tầng 1: Level 3-7 với rule ID tuỳ chỉnh
             {
                 "bool": {
                     "must": [
@@ -761,12 +844,12 @@ class WazuhClient:
                     ]
                 }
             },
-            # Tier 2: Level >= ALWAYS_REEVALUATE_LEVEL_GTE (always include)
+            # Tầng 2: Level >= ALWAYS_REEVALUATE_LEVEL_GTE (luôn bao gồm)
             {"range": {"rule.level": {"gte": ALWAYS_REEVALUATE_LEVEL_GTE}}}
         ]
         
-        # Tier 3: Attack indicators in fields (include even if rule ID doesn't match)
-        # Only apply to alerts with level >= MIN_LEVEL to avoid too much noise
+        # Tầng 3: Chỉ báo tấn công trong trường (bao gồm ngay cả khi rule ID không khớp)
+        # Chỉ áp dụng cho alerts có level >= MIN_LEVEL để tránh quá nhiều nhiễu
         if attack_indicator_filters:
             tier_filters.append({
                 "bool": {
@@ -791,7 +874,7 @@ class WazuhClient:
             }
         ]
         
-        # Log Tier 3 configuration for debugging
+        # Ghi log cấu hình Tầng 3 phục vụ debug
         if attack_indicator_filters:
             logger.debug(
                 "Tier 3 attack detection enabled: %d attack indicator filters",
@@ -805,18 +888,18 @@ class WazuhClient:
                 },
             )
         
-        # Note: SOC-grade filtering above takes precedence
-        # Legacy WAZUH_MIN_LEVEL is still used for backward compatibility in other parts of the code
+        # Lưu ý: Lọc theo SOC-grade ở trên có độ ưu tiên cao hơn
+        # WAZUH_MIN_LEVEL cũ vẫn được dùng để tương thích ngược ở các phần khác của mã
 
-        # Indexer delay compensation: Wazuh Indexer typically has 5-30s delay
-        # Subtract a few seconds from "now" to account for indexing delay
-        INDEXER_DELAY_SECONDS = 5  # Assume 5s delay for indexing
+        # Bù trừ độ trễ indexer: Wazuh Indexer thường có độ trễ 5-30s
+        # Trừ vài giây từ "now" để bù trừ cho độ trễ lập chỉ mục
+        INDEXER_DELAY_SECONDS = 5  # Giả sử độ trễ 5s cho việc lập chỉ mục
         now_with_delay = datetime.utcnow() - timedelta(seconds=INDEXER_DELAY_SECONDS)
         
-        # Real-time mode: Use dynamic lookback instead of cursor
-        # This is handled in fetch_alerts() - cursor_state is already set with lookback timestamp
+        # Chế độ real-time: sử dụng lookback động thay vì cursor
+        # Điều này được xử lý trong fetch_alerts() - cursor_state đã được thiết lập với timestamp lookback
         if WAZUH_DEMO_MODE or WAZUH_START_FROM_NOW:
-            # Use cursor_state timestamp from fetch_alerts() (already calculated with lookback)
+            # Sử dụng timestamp cursor_state từ fetch_alerts() (đã được tính với lookback)
             if cursor and cursor.get("timestamp"):
                 cutoff_iso = cursor.get("timestamp")
                 filters.append({"range": {"@timestamp": {"gt": cutoff_iso}}})
@@ -825,7 +908,7 @@ class WazuhClient:
                     cutoff_iso,
                 )
             else:
-                # Fallback: use LOOKBACK_MINUTES
+                # Fallback: sử dụng LOOKBACK_MINUTES
                 time_window_minutes = max(WAZUH_LOOKBACK_MINUTES, 1)
                 cutoff_time = now_with_delay - timedelta(minutes=time_window_minutes)
                 cutoff_iso = cutoff_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -836,7 +919,7 @@ class WazuhClient:
                     cutoff_iso,
                 )
         else:
-            # Normal mode: use cursor or 24h window
+            # Chế độ bình thường: sử dụng cursor hoặc cửa sổ 24 giờ
             time_window_hours = 24
             cutoff_time = now_with_delay - timedelta(hours=time_window_hours)
             cutoff_iso = cutoff_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -844,15 +927,15 @@ class WazuhClient:
             if cursor:
                 sort_values = cursor.get("sort")
                 if isinstance(sort_values, list) and len(sort_values) >= 2:
-                    # Use search_after for precise pagination (preferred method)
-                    # Note: search_after will be added later
+                    # Sử dụng search_after cho phân trang chính xác (phương pháp ưu tiên)
+                    # Lưu ý: search_after sẽ được thêm sau
                     pass
                 else:
-                    # Fallback to timestamp-based filtering
+                    # Fallback: chuyển sang lọc theo timestamp
                     timestamp = cursor.get("timestamp")
                     if isinstance(timestamp, str) and timestamp:
-                        # Use max of cursor timestamp or cutoff time (to avoid very old cursor)
-                        # Also subtract indexer delay to ensure we don't miss alerts being indexed
+                        # Sử dụng giá trị lớn hơn giữa timestamp cursor hoặc cutoff (để tránh cursor quá cũ)
+                        # Đồng thời trừ độ trễ indexer để đảm bảo không bỏ sót alerts đang được lập chỉ mục
                         cursor_dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                         cursor_with_delay = cursor_dt - timedelta(seconds=INDEXER_DELAY_SECONDS)
                         cursor_delayed_iso = cursor_with_delay.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -892,8 +975,8 @@ class WazuhClient:
             filters.append({"term": {"agent.id": agent_id}})
 
         # Sort by timestamp ASC, then by agent.id to ensure we get alerts from all agents
-        # IMPORTANT: No _source_includes or _source_excludes - we fetch ALL fields from _source
-        # This ensures both Agent 001 and Agent 002 get the same complete field set for filtering
+        # QUAN TRỌNG: Không dùng _source_includes hay _source_excludes - ta fetch TẤT CẢ trường từ _source
+        # Điều này đảm bảo cả Agent 001 và Agent 002 nhận được tập trường đầy đủ giống nhau để lọc
         payload: Dict[str, Any] = {
             "size": size,
             "sort": [
@@ -902,21 +985,21 @@ class WazuhClient:
                 {"_id": {"order": "asc"}},
             ],
             "track_total_hits": False,
-            # NOTE: We intentionally do NOT specify _source_includes or _source_excludes
-            # This means OpenSearch will return ALL fields from _source, ensuring:
-            # 1. Both Agent 001 and Agent 002 get identical field sets
-            # 2. All fields needed for filtering are available
-            # 3. No silent field drops that could cause filtering inconsistencies
+            # LƯU Ý: Chúng tôi cố tình KHÔNG chỉ định _source_includes hoặc _source_excludes
+            # Điều này có nghĩa OpenSearch sẽ trả về TẤT CẢ trường từ _source, đảm bảo:
+            # 1. Cả Agent 001 và Agent 002 nhận được cùng một tập trường giống nhau
+            # 2. Tất cả các trường cần cho lọc đều có sẵn
+            # 3. Không có trường bị vô tình loại bỏ gây ra sự không nhất quán khi lọc
             "query": {
                 "bool": {
                     "filter": filters,
-                    # No agent-specific exclusions; all agent alerts are fetched uniformly.
+                    # Không loại trừ theo agent riêng; tất cả alert của agent được fetch đồng đều.
                 }
             },
         }
 
-        # Add search_after if cursor has sort values (and not in real-time mode)
-        # In real-time mode, we don't use search_after to avoid missing alerts
+        # Thêm search_after nếu cursor có giá trị sort (và không ở chế độ real-time)
+        # Ở chế độ real-time, không dùng search_after để tránh bỏ sót alerts
         if not WAZUH_DEMO_MODE and not WAZUH_START_FROM_NOW and cursor:
             sort_values = cursor.get("sort")
             if isinstance(sort_values, list) and len(sort_values) >= 2:
@@ -977,7 +1060,7 @@ class WazuhClient:
             else []
         )
         
-        # Log raw hits count from indexer (before filtering)
+        # Ghi log số hits thô từ indexer (trước khi lọc)
         total_hits = data.get("hits", {}).get("total", {}) if isinstance(data, dict) else {}
         if isinstance(total_hits, dict):
             total_count = total_hits.get("value", len(hits))
@@ -1088,6 +1171,81 @@ class WazuhClient:
             },
         )
 
+        # Post-filter aggregation/prioritization:
+        # - For WebServer (agent_id '001'): aggregate repetitive web/attack alerts and emit 1 aggregated alert per 5 similar events (windowed)
+        # - For pfSense (agent_id '002'): keep all alerts (no suppression), we already prioritize pfSense fetches
+        try:
+            if agent_id == "001":
+                # attack patterns to aggregate (by rule id or tag)
+                repeatable_rule_ids = {31103, 31171, 31152, 5758, 2502, 5551}  # SQLi and common web/auth brute rules
+                repeatable_tag_keywords = ["sql_injection", "sqli", "ssh_bruteforce", "auth_bruteforce", "dos", "syn", "web_scanning", "web_attack"]
+                aggregation_window_seconds = 300
+                aggregation_batch_size = 5
+
+                aggregated_output: List[Dict[str, Any]] = []
+
+                for alert in filtered_alerts:
+                    rule_id = alert.get("rule", {}).get("id")
+                    tags = [str(t).lower() for t in (alert.get("tags") or [])]
+                    # robust src detection
+                    source = alert.get("source", {}) or {}
+                    src_ip = source.get("ip") or alert.get("srcip") or alert.get("flow", {}).get("src_ip") or ""
+
+                    # determine a grouping key: rule_id + src_ip + optional url path
+                    http_ctx = alert.get("http") or {}
+                    url_path = ""
+                    if http_ctx and http_ctx.get("url"):
+                        url_path = http_ctx.get("url", "").split("?")[0]
+
+                    group_key = f"{rule_id}:{src_ip}:{url_path}"
+
+                    # detect if this alert belongs to repeatable attack families
+                    is_repeatable = False
+                    try:
+                        if isinstance(rule_id, int) and rule_id in repeatable_rule_ids:
+                            is_repeatable = True
+                    except Exception:
+                        pass
+                    if not is_repeatable:
+                        if any(k in "|".join(tags) for k in repeatable_tag_keywords):
+                            is_repeatable = True
+
+                    if is_repeatable:
+                        count = self._alert_throttle.increment_and_get(group_key, window_seconds=aggregation_window_seconds)
+                        # Only emit an aggregated summary every aggregation_batch_size events
+                        if count % aggregation_batch_size == 0:
+                            agg = {
+                                "@timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                                "agent": alert.get("agent", {}),
+                                "rule": {"id": 100200, "level": alert.get("rule", {}).get("level", 6), "description": f"Aggregated {aggregation_batch_size}x events for rule {rule_id}"},
+                                    "message": f"Aggregated {aggregation_batch_size} similar alerts for rule {rule_id} from source {src_ip} (window {aggregation_window_seconds}s).",
+                                    # Ensure aggregated alert carries a clear source IP for Active Response and audit
+                                    "srcip": src_ip,
+                                    "src_ip": src_ip,
+                                "tags": ["aggregated", "rate_limited", "web_attack"],
+                                "group_key": group_key,
+                                "aggregated_count": aggregation_batch_size,
+                                "sample_alert": {
+                                    "original_rule_id": rule_id,
+                                    "url": http_ctx.get("url"),
+                                    "severity": alert.get("rule", {}).get("level"),
+                                },
+                            }
+                            aggregated_output.append(agg)
+                        else:
+                            # suppress this individual alert (it's part of an aggregation batch)
+                            # do not append to aggregated_output
+                            continue
+                    else:
+                        # Non-repeatable: keep as-is
+                        aggregated_output.append(alert)
+
+                filtered_alerts = aggregated_output
+            elif agent_id == "002":
+                # pfSense: do not aggregate/suppress here (we prioritize pfSense elsewhere)
+                pass
+        except Exception as exc:
+            logger.debug("Post-filter aggregation error: %s", exc, exc_info=True)
         # Update cursor
         last_hit = hits[-1]
         cursor_payload: Dict[str, Any] = {}
@@ -1111,8 +1269,8 @@ class WazuhClient:
         """
         Fetch alerts from the Wazuh indexer and normalize them.
         
-        SOC Demo Mode: Query each agent separately to ensure balanced distribution.
-        This prevents one agent (e.g., pfSense) from flooding the pipeline.
+        Chế độ Demo SOC: Truy vấn từng agent riêng để đảm bảo phân phối cân bằng.
+        Điều này ngăn chặn một agent duy nhất (ví dụ: pfSense) làm ngập pipeline.
         
         Args:
             max_batches: Maximum number of batches to fetch (default: WAZUH_MAX_BATCHES).
@@ -1129,18 +1287,18 @@ class WazuhClient:
         if WAZUH_START_FROM_NOW or WAZUH_DEMO_MODE:
             from datetime import datetime, timedelta
             
-            # Calculate dynamic lookback based on poll interval and indexer delay
-            # This ensures we don't miss alerts while staying real-time
+            # Tính toán lookback động dựa trên poll interval và độ trễ indexer
+            # Điều này đảm bảo không bỏ sót alerts trong khi vẫn giữ chế độ real-time
             POLL_INTERVAL_SEC = WAZUH_POLL_INTERVAL_SEC  # Default: 8 seconds
             MAX_INDEXER_DELAY_SEC = 30  # Max indexer delay (5-30s, use 30s for safety)
             SAFETY_BUFFER_SEC = 10  # Safety buffer for edge cases
             lookback_seconds = POLL_INTERVAL_SEC + MAX_INDEXER_DELAY_SEC + SAFETY_BUFFER_SEC
             
-            # If LOOKBACK_MINUTES is set and > 0, use it; otherwise use calculated value
+            # Nếu LOOKBACK_MINUTES được đặt và > 0, dùng nó; nếu không thì dùng giá trị tính được
             if WAZUH_LOOKBACK_MINUTES > 0:
                 lookback_minutes = max(WAZUH_LOOKBACK_MINUTES, lookback_seconds / 60)
             else:
-                # Auto-calculate from poll interval
+                # Tự động tính toán từ poll interval
                 lookback_minutes = max(lookback_seconds / 60, 1.0)  # At least 1 minute
             
             now_with_delay = datetime.utcnow() - timedelta(minutes=lookback_minutes)
@@ -1167,11 +1325,13 @@ class WazuhClient:
         all_alerts = []
         seen_agents = set()
 
-        # SOC Strategy: Query each agent separately to ensure balanced distribution
-        # This prevents pfSense from flooding the pipeline
-        expected_agents = ["001", "002"]  # WebServer and pfSense
-        base_per_agent_size = 50  # Base size for adaptive balancing
-        per_agent_size = base_per_agent_size  # Start with base size
+        # SOC Strategy: Query each agent separately to ensure balanced distribution.
+        # To prioritize pfSense (agent '002') we use per-agent page sizes (weights).
+        # You can tune these weights to favor pfSense over WebServer.
+        expected_agents = ["002", "001"]  # Prioritize pfSense first
+        per_agent_base_sizes = {"001": 40, "002": 120}  # WebServer:40, pfSense:120 (tunable)
+        # Start with per-agent size map (may be adapted below)
+        per_agent_size_map = per_agent_base_sizes.copy()
 
         # Track cursors per agent
         agent_cursors: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -1194,7 +1354,7 @@ class WazuhClient:
             batch_agent_counts = {agent_id: 0 for agent_id in expected_agents}
 
             # Fetch from each agent separately
-            # IMPORTANT: Query ALL expected agents to ensure balanced distribution
+            # QUAN TRỌNG: Truy vấn TẤT CẢ agents dự kiến để đảm bảo phân phối cân bằng
             for agent_id in expected_agents:
                 agent_cursor = agent_cursors.get(agent_id)
                 
@@ -1212,8 +1372,10 @@ class WazuhClient:
                     },
                 )
                 
+                # Use per-agent page size to prioritize agents (pfSense gets larger window)
+                page_size_for_agent = per_agent_size_map.get(agent_id, 50)
                 alerts, new_cursor = self._fetch_alerts_for_agent(
-                    agent_id, agent_cursor, page_size=per_agent_size
+                    agent_id, agent_cursor, page_size=page_size_for_agent
                 )
 
                 # Update cursor even if no alerts (to track progress)
@@ -1269,23 +1431,29 @@ class WazuhClient:
                         },
                     )
             
-            # Adaptive balancing: Adjust per_agent_size if imbalance detected
+            # Adaptive balancing: Adjust per-agent sizes if imbalance detected
             if batch_num > 0 and batch_agent_counts:
                 max_count = max(batch_agent_counts.values())
                 min_count = min(batch_agent_counts.values())
                 if max_count > 0:
-                    imbalance_ratio = max_count / (min_count + 1)  # +1 to avoid division by zero
-                    if imbalance_ratio > 2.0:  # More than 2x difference
-                        # Reduce size for high-volume agents, increase for low-volume
-                        per_agent_size = max(20, min(100, int(base_per_agent_size / imbalance_ratio)))
+                    imbalance_ratio = max_count / (min_count + 1)
+                    if imbalance_ratio > 2.0:
+                        # Reduce page size for the agent producing most alerts and
+                        # increase for the underrepresented agent (favor pfSense)
+                        for aid, cnt in batch_agent_counts.items():
+                            if cnt == max_count:
+                                # scale down but keep at least 20
+                                per_agent_size_map[aid] = max(20, int(per_agent_size_map.get(aid, 50) / imbalance_ratio))
+                            elif cnt == min_count:
+                                # boost small producers up to a cap
+                                per_agent_size_map[aid] = min(200, int(per_agent_size_map.get(aid, 50) * imbalance_ratio))
                         logger.debug(
-                            "Agent imbalance detected, adjusting per_agent_size to %d",
-                            per_agent_size,
+                            "Agent imbalance detected, adjusted per_agent_size_map",
                             extra={
                                 "component": "wazuh_client",
-                                "action": "adaptive_balancing",
+                                "action": "adaptive_balancing_per_agent",
                                 "imbalance_ratio": round(imbalance_ratio, 2),
-                                "new_per_agent_size": per_agent_size,
+                                "per_agent_size_map": per_agent_size_map,
                                 "agent_counts": batch_agent_counts
                             }
                         )
@@ -1323,18 +1491,19 @@ class WazuhClient:
                 },
             )
 
-            # If we got fewer alerts than expected, we've likely reached the end
-            if len(batch_alerts) < per_agent_size * len(expected_agents):
+            # If we got fewer alerts than expected (based on per-agent sizes), we've likely reached the end
+            expected_total_per_batch = sum(per_agent_size_map.get(aid, 50) for aid in expected_agents)
+            if len(batch_alerts) < expected_total_per_batch:
                 logger.debug(
                     "Reached end of alerts (got %d alerts, expected ~%d)",
                     len(batch_alerts),
-                    per_agent_size * len(expected_agents),
+                    expected_total_per_batch,
                 )
                 break
 
         # Save cursor (use the most recent cursor from any agent)
         if agent_cursors:
-            # Use the cursor from the agent with the most recent timestamp
+            # Sử dụng cursor từ agent có timestamp mới nhất
             latest_cursor = None
             latest_timestamp = None
             for agent_id, cursor in agent_cursors.items():
@@ -1372,8 +1541,9 @@ class WazuhClient:
             agent_key = f"{agent_id}:{agent_name}"
             agent_distribution[agent_key] = agent_distribution.get(agent_key, 0) + 1
 
-        batches_fetched = len(all_alerts) // (per_agent_size * len(expected_agents)) + (
-            1 if len(all_alerts) % (per_agent_size * len(expected_agents)) > 0 else 0
+        expected_total_per_batch = sum(per_agent_size_map.get(aid, 50) for aid in expected_agents)
+        batches_fetched = len(all_alerts) // expected_total_per_batch + (
+            1 if len(all_alerts) % expected_total_per_batch > 0 else 0
         )
 
         # Log critical alerts found

@@ -1,4 +1,4 @@
-"""Timezone utilities for localizing timestamps."""
+"""Tiện ích timezone để chuyển đổi timestamp về timezone địa phương."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _FALLBACK_OFFSETS = {
 
 @lru_cache(maxsize=1)
 def get_local_timezone() -> timezone:
-    """Return the configured local timezone, with sane fallbacks."""
+    """Trả về timezone địa phương đã cấu hình, với các fallback hợp lý."""
 
     if ZoneInfo is not None:
         try:
@@ -57,7 +57,7 @@ LOCAL_TZ = get_local_timezone()
 
 
 def utc_iso_to_local(iso_timestamp: str) -> Optional[str]:
-    """Convert UTC ISO8601 timestamp string to the configured local timezone."""
+    """Chuyển đổi chuỗi timestamp ISO8601 UTC sang timezone địa phương đã cấu hình."""
 
     if not iso_timestamp:
         return None
@@ -78,13 +78,13 @@ def utc_iso_to_local(iso_timestamp: str) -> Optional[str]:
 
 
 def now_local_iso() -> str:
-    """Current time in the configured local timezone as ISO8601 string."""
+    """Thời gian hiện tại theo timezone đã cấu hình, dạng chuỗi ISO8601."""
 
     return datetime.now(LOCAL_TZ).isoformat()
 
 
 def now_utc_iso() -> str:
-    """Current time in UTC as ISO8601 string."""
+    """Thời gian hiện tại theo UTC dạng chuỗi ISO8601."""
 
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
 

@@ -53,7 +53,19 @@ def normalize_attack_type(alert: Dict[str, Any]) -> Optional[str]:
         "sqlinjection": "sql_injection",
         "command_injection": "command_injection",
         "path_traversal": "path_traversal",
+        "lfi": "lfi",
+        "local_file_inclusion": "lfi",
+        "file_inclusion": "lfi",
+        "file_upload": "file_upload",
+        "webshell": "file_upload",
         "csrf": "csrf",
+        "brute_force": "brute_force",
+        "bruteforce": "brute_force",
+        "ssh_bruteforce": "ssh_bruteforce",
+        "auth_bruteforce": "brute_force",
+        "syn_flood": "syn_flood",
+        "dos": "dos",
+        "ddos": "dos",
         "web_attack": "web_attack",
     }
     
@@ -96,6 +108,22 @@ def normalize_attack_type(alert: Dict[str, Any]) -> Optional[str]:
         if any(re.search(pattern, signature_text, re.IGNORECASE) for pattern in path_patterns):
             return "path_traversal"
         
+        # LFI (Local File Inclusion) patterns
+        lfi_patterns = [
+            r"local.*file.*inclusion", r"lfi", r"file.*inclusion", r"include.*file",
+            r"php.*include", r"require.*file", r"\.\./.*etc/passwd", r"\.\./.*proc/self"
+        ]
+        if any(re.search(pattern, signature_text, re.IGNORECASE) for pattern in lfi_patterns):
+            return "lfi"
+        
+        # File Upload patterns
+        file_upload_patterns = [
+            r"file.*upload", r"webshell", r"suspicious.*upload", r"php.*upload",
+            r"upload.*php", r"shell.*upload", r"malicious.*file"
+        ]
+        if any(re.search(pattern, signature_text, re.IGNORECASE) for pattern in file_upload_patterns):
+            return "file_upload"
+        
         # CSRF patterns
         csrf_patterns = [
             r"csrf", r"cross-site.*request.*forgery", r"cross site.*request.*forgery",
@@ -103,6 +131,38 @@ def normalize_attack_type(alert: Dict[str, Any]) -> Optional[str]:
         ]
         if any(re.search(pattern, signature_text, re.IGNORECASE) for pattern in csrf_patterns):
             return "csrf"
+        
+        # Brute Force patterns
+        brute_force_patterns = [
+            r"brute.*force", r"bruteforce", r"authentication.*failed", r"login.*attempt",
+            r"multiple.*failed.*login", r"password.*cracking"
+        ]
+        if any(re.search(pattern, signature_text, re.IGNORECASE) for pattern in brute_force_patterns):
+            return "brute_force"
+        
+        # SSH Brute Force patterns
+        ssh_bruteforce_patterns = [
+            r"ssh.*brute", r"ssh.*bruteforce", r"ssh.*authentication.*failed",
+            r"sshd.*failed", r"invalid.*user.*ssh"
+        ]
+        if any(re.search(pattern, signature_text, re.IGNORECASE) for pattern in ssh_bruteforce_patterns):
+            return "ssh_bruteforce"
+        
+        # SYN Flood patterns
+        syn_flood_patterns = [
+            r"syn.*flood", r"synflood", r"tcp.*syn.*flood", r"possible.*syn.*flood",
+            r"syn.*attack", r"connection.*flood"
+        ]
+        if any(re.search(pattern, signature_text, re.IGNORECASE) for pattern in syn_flood_patterns):
+            return "syn_flood"
+        
+        # DoS/DDoS patterns
+        dos_patterns = [
+            r"denial.*of.*service", r"dos", r"ddos", r"distributed.*denial",
+            r"flood.*attack", r"http.*flood", r"tcp.*flood"
+        ]
+        if any(re.search(pattern, signature_text, re.IGNORECASE) for pattern in dos_patterns):
+            return "dos"
     
     # Priority 3: Check HTTP URL patterns
     if http_url:
@@ -117,6 +177,14 @@ def normalize_attack_type(alert: Dict[str, Any]) -> Optional[str]:
         # Command Injection in URL
         if any(pattern in http_url for pattern in ["cmd=", "exec=", "/bin/", "system("]):
             return "command_injection"
+        
+        # LFI in URL
+        if any(pattern in http_url for pattern in ["../", "..\\", "etc/passwd", "proc/self", "include=", "file="]):
+            return "lfi"
+        
+        # File Upload in URL
+        if any(pattern in http_url for pattern in ["upload", "file_upload", "fileupload", "webshell"]):
+            return "file_upload"
         
         # CSRF in URL (less common, but possible)
         if any(pattern in http_url for pattern in ["csrf", "cross-site"]):
@@ -136,9 +204,33 @@ def normalize_attack_type(alert: Dict[str, Any]) -> Optional[str]:
         if any(keyword in rule_description for keyword in ["command injection", "cmd injection"]):
             return "command_injection"
         
+        # LFI
+        if any(keyword in rule_description for keyword in ["local file inclusion", "lfi", "file inclusion"]):
+            return "lfi"
+        
+        # File Upload
+        if any(keyword in rule_description for keyword in ["file upload", "suspicious upload", "webshell"]):
+            return "file_upload"
+        
         # CSRF
         if any(keyword in rule_description for keyword in ["csrf", "cross-site request forgery", "cross site request forgery"]):
             return "csrf"
+        
+        # Brute Force
+        if any(keyword in rule_description for keyword in ["brute force", "bruteforce", "authentication failed", "login attempt"]):
+            return "brute_force"
+        
+        # SSH Brute Force
+        if any(keyword in rule_description for keyword in ["ssh brute", "ssh bruteforce", "ssh authentication failed"]):
+            return "ssh_bruteforce"
+        
+        # SYN Flood
+        if any(keyword in rule_description for keyword in ["syn flood", "synflood", "tcp syn flood"]):
+            return "syn_flood"
+        
+        # DoS
+        if any(keyword in rule_description for keyword in ["denial of service", "dos", "ddos", "flood attack"]):
+            return "dos"
     
     # Priority 5: Check rule groups
     for group in rule_groups:
@@ -149,6 +241,18 @@ def normalize_attack_type(alert: Dict[str, Any]) -> Optional[str]:
             return "sql_injection"
         elif "command" in group_lower and "injection" in group_lower:
             return "command_injection"
+        elif "file" in group_lower and ("upload" in group_lower or "webshell" in group_lower):
+            return "file_upload"
+        elif ("file" in group_lower and "inclusion" in group_lower) or "lfi" in group_lower:
+            return "lfi"
+        elif ("brute" in group_lower or "bruteforce" in group_lower) and "ssh" in group_lower:
+            return "ssh_bruteforce"
+        elif "brute" in group_lower or "bruteforce" in group_lower or "authentication_failed" in group_lower:
+            return "brute_force"
+        elif "syn" in group_lower and "flood" in group_lower:
+            return "syn_flood"
+        elif "dos" in group_lower or "ddos" in group_lower:
+            return "dos"
     
     # Priority 6: Check Suricata category
     if suricata_category:
@@ -175,8 +279,14 @@ def get_attack_type_priority(attack_type: Optional[str]) -> int:
     priority_map = {
         "sql_injection": 10,      # Highest - can lead to data breach
         "command_injection": 10,   # Highest - can lead to RCE
+        "file_upload": 9,          # Very High - webshell upload can lead to RCE
+        "lfi": 8,                  # High - can access sensitive files
         "xss": 8,                  # High - can steal sessions, inject malware
         "path_traversal": 7,       # High - can access sensitive files
+        "dos": 7,                  # High - can cause service disruption
+        "syn_flood": 7,            # High - DoS attack
+        "ssh_bruteforce": 6,      # Medium-High - can lead to unauthorized access
+        "brute_force": 6,          # Medium-High - can lead to account compromise
         "csrf": 6,                 # Medium-High - can perform actions as user
         "web_attack": 5,           # Medium - generic web attack
     }
@@ -186,8 +296,8 @@ def get_attack_type_priority(attack_type: Optional[str]) -> int:
 
 def normalize_attack_type_for_scoring(alert: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Add normalized attack type to alert for consistent scoring.
-    This ensures same attack type gets same base score regardless of agent/rule.
+    Thêm loại tấn công đã chuẩn hóa vào alert để tính điểm nhất quán.
+    Điều này đảm bảo cùng một loại tấn công có cùng điểm cơ bản bất kể agent/rule.
     """
     attack_type = normalize_attack_type(alert)
     attack_priority = get_attack_type_priority(attack_type)

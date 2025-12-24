@@ -1,4 +1,4 @@
-"""HTTP client with retry and backoff."""
+"""HTTP client với cơ chế retry và backoff."""
 import time
 import logging
 from typing import Optional, Dict, Any
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class RetrySession(Session):
-    """Requests session with automatic retry and backoff."""
+    """Requests session với cơ chế tự động retry và backoff."""
     
     def __init__(
         self,
@@ -34,7 +34,7 @@ class RetrySession(Session):
         self.mount("https://", adapter)
     
     def request_with_backoff(self, *args, **kwargs) -> Any:
-        """Make request with exponential backoff on failure."""
+        """Thực hiện request với exponential backoff khi thất bại."""
         max_attempts = 4
         for attempt in range(max_attempts):
             try:

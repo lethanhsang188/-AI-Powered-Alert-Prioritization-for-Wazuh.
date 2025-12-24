@@ -1,4 +1,4 @@
-"""LLM response caching to improve performance for similar alerts."""
+"""Bộ nhớ đệm (cache) phản hồi LLM để cải thiện hiệu năng cho các cảnh báo tương tự."""
 import hashlib
 import json
 import logging
@@ -11,18 +11,18 @@ logger = logging.getLogger(__name__)
 
 class LLMCache:
     """
-    Cache LLM responses for similar alerts to reduce API calls.
+    Cache phản hồi LLM cho các cảnh báo tương tự để giảm số lần gọi API.
     
-    Uses content-based hashing to identify similar alerts.
+    Sử dụng băm dựa trên nội dung để nhận diện các cảnh báo tương tự.
     """
     
     def __init__(self, ttl_seconds: int = 3600, max_size: int = 1000):
         """
-        Initialize LLM cache.
+        Khởi tạo cache LLM.
         
         Args:
-            ttl_seconds: Time-to-live for cache entries (default: 1 hour)
-            max_size: Maximum number of cache entries
+            ttl_seconds: Thời gian tồn tại của mục cache (mặc định: 1 giờ)
+            max_size: Số mục cache tối đa
         """
         self.ttl_seconds = ttl_seconds
         self.max_size = max_size
@@ -31,11 +31,11 @@ class LLMCache:
     
     def _generate_cache_key(self, alert_text: str, rule_context: Optional[Dict[str, Any]]) -> str:
         """
-        Generate cache key from alert text and rule context.
+        Tạo khoá cache từ văn bản alert và ngữ cảnh rule.
         
-        Uses normalized content to catch similar alerts.
+        Dùng nội dung đã được chuẩn hoá để bắt các alert tương tự.
         """
-        # Normalize alert text (remove timestamps, IPs that change)
+        # Chuẩn hoá văn bản alert (loại bỏ timestamp, IP thay đổi)
         normalized_text = self._normalize_alert_text(alert_text)
         
         # Add rule context
@@ -53,12 +53,12 @@ class LLMCache:
     
     def _normalize_alert_text(self, text: str) -> str:
         """
-        Normalize alert text to catch similar alerts.
+        Chuẩn hoá văn bản alert để bắt các cảnh báo tương tự.
         
-        Removes:
+        Loại bỏ:
         - Timestamps
-        - IP addresses (replace with placeholders)
-        - User-specific data
+        - Địa chỉ IP (thay bằng placeholder)
+        - Dữ liệu theo người dùng
         """
         import re
         
@@ -90,7 +90,7 @@ class LLMCache:
             entry = self._cache[cache_key]
             cached_at = entry.get("_cached_at", 0)
             
-            # Check TTL
+            # Kiểm tra TTL
             if datetime.utcnow().timestamp() - cached_at < self.ttl_seconds:
                 self._access_times[cache_key] = datetime.utcnow()
                 logger.debug(
@@ -103,7 +103,7 @@ class LLMCache:
                 )
                 return entry.get("result")
             else:
-                # Expired, remove
+                # Hết hạn, xoá mục
                 self._cache.pop(cache_key, None)
                 self._access_times.pop(cache_key, None)
         
@@ -111,18 +111,18 @@ class LLMCache:
     
     def set(self, alert_text: str, rule_context: Optional[Dict[str, Any]], result: Dict[str, Any]):
         """
-        Cache LLM response.
+        Lưu phản hồi LLM vào cache.
         
         Args:
-            alert_text: Alert text
-            rule_context: Rule context
-            result: LLM result to cache
+            alert_text: Văn bản alert
+            rule_context: Ngữ cảnh rule
+            result: Kết quả LLM để lưu vào cache
         """
         cache_key = self._generate_cache_key(alert_text, rule_context)
         
-        # Evict oldest if cache is full
+        # Xoá mục cũ nhất nếu cache đã đầy
         if len(self._cache) >= self.max_size and cache_key not in self._cache:
-            # Remove least recently used
+            # Xoá mục dùng ít nhất gần đây nhất
             if self._access_times:
                 oldest_key = min(self._access_times.items(), key=lambda x: x[1])[0]
                 self._cache.pop(oldest_key, None)
@@ -135,7 +135,7 @@ class LLMCache:
         self._access_times[cache_key] = datetime.utcnow()
         
         logger.debug(
-            f"LLM response cached for key {cache_key}",
+            f"Đã cache phản hồi LLM cho khoá {cache_key}",
             extra={
                 "component": "llm_cache",
                 "action": "cache_set",
@@ -145,11 +145,11 @@ class LLMCache:
         )
     
     def clear(self):
-        """Clear all cache entries."""
+        """Xoá tất cả mục cache."""
         self._cache.clear()
         self._access_times.clear()
         logger.info(
-            "LLM cache cleared",
+            "Đã xoá cache LLM",
             extra={
                 "component": "llm_cache",
                 "action": "cache_clear"
@@ -157,7 +157,7 @@ class LLMCache:
         )
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
+        """Lấy thống kê cache."""
         return {
             "size": len(self._cache),
             "max_size": self.max_size,
@@ -170,7 +170,7 @@ _llm_cache: Optional[LLMCache] = None
 
 
 def get_llm_cache() -> LLMCache:
-    """Get or create global LLM cache instance."""
+    """Lấy hoặc tạo thể hiện global của cache LLM."""
     global _llm_cache
     if _llm_cache is None:
         from src.common.config import LLM_CACHE_TTL_SECONDS, LLM_CACHE_MAX_SIZE

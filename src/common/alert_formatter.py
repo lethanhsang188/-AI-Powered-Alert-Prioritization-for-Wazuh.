@@ -1,4 +1,4 @@
-"""Format alerts for SOC triage - standardized alert card format."""
+"""Định dạng cảnh báo cho triage SOC - định dạng card cảnh báo chuẩn."""
 import hashlib
 import logging
 from typing import Any, Dict, Optional
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def _is_internal_ip(ip: str) -> bool:
-    """Check if IP is internal/private."""
+    """Kiểm tra IP có phải là IP nội bộ/private hay không."""
     if not ip:
         return False
     parts = ip.split(".")
@@ -36,30 +36,30 @@ def _is_internal_ip(ip: str) -> bool:
 
 
 def _generate_dedup_key(alert: Dict[str, Any], window_minutes: int = 5) -> str:
-    """Generate deduplication key for correlation."""
+    """Tạo khóa dedup để tương quan."""
     rule = alert.get("rule", {})
     agent = alert.get("agent", {})
     http_context = alert.get("http")
     suricata_alert = alert.get("suricata_alert")
     
-    # Build dedup components
+    # Xây dựng các thành phần dedup
     components = [
         alert.get("srcip", ""),
         agent.get("ip", ""),
         str(rule.get("id", "")),
     ]
     
-    # Add signature ID if available
+    # Thêm signature ID nếu có
     if suricata_alert and suricata_alert.get("signature_id"):
         components.append(str(suricata_alert.get("signature_id")))
     
-    # Add URL path if available
+    # Thêm đường dẫn URL nếu có
     if http_context and http_context.get("url"):
-        # Extract path only (remove query params)
+        # Chỉ trích xuất path (loại bỏ query params)
         url_path = http_context.get("url", "").split("?")[0]
         components.append(url_path)
     
-    # Add timestamp window (round to nearest window_minutes)
+    # Thêm cửa sổ timestamp (làm tròn tới window_minutes gần nhất)
     timestamp = alert.get("@timestamp", "")
     if timestamp:
         try:
@@ -75,7 +75,7 @@ def _generate_dedup_key(alert: Dict[str, Any], window_minutes: int = 5) -> str:
 
 
 def _extract_mitre_ids(rule: Dict[str, Any]) -> list:
-    """Extract MITRE ATT&CK IDs from rule."""
+    """Trích xuất MITRE ATT&CK IDs từ rule."""
     mitre = rule.get("mitre", {})
     if isinstance(mitre, dict):
         mitre_ids = mitre.get("id", [])
@@ -87,7 +87,7 @@ def _extract_mitre_ids(rule: Dict[str, Any]) -> list:
 
 
 def _build_wazuh_dashboard_link(alert: Dict[str, Any]) -> Optional[str]:
-    """Build link to Wazuh dashboard for this alert."""
+    """Xây dựng liên kết tới dashboard Wazuh cho cảnh báo này."""
     if not WAZUH_API_URL:
         return None
     
@@ -100,20 +100,20 @@ def _build_wazuh_dashboard_link(alert: Dict[str, Any]) -> Optional[str]:
     if not rule_id or not agent_id or not timestamp:
         return None
     
-    # Extract base URL (remove /api if present)
+    # Trích xuất base URL (loại bỏ /api nếu có)
     base_url = WAZUH_API_URL.replace("/api", "").rstrip("/")
     
-    # Build Wazuh dashboard link (format may vary by Wazuh version)
-    # Example: https://wazuh-server:55000/app/wazuh#/agents?agent=001&tab=events&event=533
+    # Xây dựng liên kết dashboard Wazuh (định dạng có thể khác giữa các phiên bản Wazuh)
+    # Ví dụ: https://wazuh-server:55000/app/wazuh#/agents?agent=001&tab=events&event=533
     link = f"{base_url}/app/wazuh#/agents?agent={agent_id}&tab=events&event={rule_id}"
     
     return link
 
 
 def _build_indexer_link(alert: Dict[str, Any]) -> Optional[str]:
-    """Build link to raw event in indexer (if indexer UI available)."""
-    # This would require indexer UI URL - can be added to config if needed
-    # For now, return None
+    """Xây dựng liên kết tới sự kiện thô trong indexer (nếu có giao diện indexer)."""
+    # Việc này cần URL giao diện indexer - có thể thêm vào config nếu cần
+    # Hiện tại trả về None
     return None
 
 
@@ -135,7 +135,7 @@ def _format_timestamp(timestamp: str, local_timestamp: Optional[str] = None) -> 
                 tz_abbr = LOCAL_TIMEZONE.split("/")[-1] if "/" in LOCAL_TIMEZONE else "LOCAL"
                 local_str = dt_local.strftime(f"%Y-%m-%d %H:%M:%S {tz_abbr}")
             except Exception:
-                # Fallback: use utc_iso_to_local helper
+                # Fallback: dùng helper utc_iso_to_local
                 local_ts = utc_iso_to_local(timestamp)
                 if local_ts:
                     try:
@@ -147,7 +147,7 @@ def _format_timestamp(timestamp: str, local_timestamp: Optional[str] = None) -> 
                 else:
                     local_str = "N/A"
         else:
-            # Fallback: use utc_iso_to_local helper
+            # Fallback: dùng helper utc_iso_to_local
             local_ts = utc_iso_to_local(timestamp)
             if local_ts:
                 try:
@@ -400,14 +400,14 @@ def format_alert_card(alert: Dict[str, Any], triage: Dict[str, Any]) -> Dict[str
             "id": agent.get("id", ""),
             "role": None  # Can be enriched from config
         },
-        "destination": {
-            "ip": alert.get("dest_ip") or agent.get("ip", ""),  # Prefer top-level dest_ip if available
+            "destination": {
+            "ip": alert.get("dest_ip") or agent.get("ip", ""),  # Ưu tiên dest_ip top-level nếu có
             "port": alert.get("dest_port") or (http_context.get("status") if http_context else None),
             "hostname": http_context.get("hostname") if http_context else None,
             "url": http_context.get("url") if http_context else None
         },
-        "source": {
-            "ip": alert.get("src_ip") or alert.get("srcip", ""),  # Prefer top-level src_ip if available
+            "source": {
+            "ip": alert.get("src_ip") or alert.get("srcip", ""),  # Ưu tiên src_ip top-level nếu có
             "port": alert.get("src_port") or None,
             "is_internal": source_geo.get("is_internal", _is_internal_ip(alert.get("src_ip") or alert.get("srcip", ""))),
             "geo": {

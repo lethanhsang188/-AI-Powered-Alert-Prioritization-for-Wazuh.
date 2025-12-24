@@ -1,4 +1,4 @@
-"""Alert enrichment with GeoIP, ASN, and threat intelligence."""
+"""Làm giàu cảnh báo với GeoIP, ASN và threat intelligence."""
 import logging
 import ipaddress
 from typing import Any, Dict, Optional
@@ -11,15 +11,15 @@ logger = logging.getLogger(__name__)
 
 
 class GeoIPEnricher:
-    """Enrich alerts with GeoIP information using free services."""
+    """Làm giàu alert với thông tin GeoIP sử dụng dịch vụ miễn phí."""
     
     def __init__(self):
         self.session = RetrySession(max_retries=2, timeout=3)
         self._cache: Dict[str, Dict[str, Any]] = {}
-        self._cache_ttl = 3600  # 1 hour cache
+        self._cache_ttl = 3600  # Cache 1 giờ
     
     def _is_private_ip(self, ip: str) -> bool:
-        """Check if IP is private/internal."""
+        """Kiểm tra IP có phải IP private/nội bộ không."""
         try:
             ip_obj = ipaddress.ip_address(ip)
             return ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local
@@ -28,21 +28,21 @@ class GeoIPEnricher:
     
     @lru_cache(maxsize=1000)
     def _get_geoip_cached(self, ip: str, cache_key: str) -> Optional[Dict[str, Any]]:
-        """Cached GeoIP lookup (using lru_cache for in-memory cache)."""
-        # Check our manual cache first (for TTL)
+        """Tra cứu GeoIP có cache (dùng lru_cache cho cache bộ nhớ trong)."""
+        # Kiểm tra cache thủ công trước (để tuân thủ TTL)
         if cache_key in self._cache:
             cached_data = self._cache[cache_key]
             if time.time() - cached_data.get("_cached_at", 0) < self._cache_ttl:
                 return cached_data.get("data")
         
-        # Try ipapi.co (free, no API key required)
+        # Thử ipapi.co (miễn phí, không cần API key)
         try:
             url = f"https://ipapi.co/{ip}/json/"
             response = self.session.request("GET", url, timeout=3)
             if response.status_code == 200:
                 data = response.json()
                 
-                # Check for rate limit
+                # Kiểm tra giới hạn tỷ lệ (rate limit)
                 if "error" in data:
                     logger.debug(f"GeoIP API error for {ip}: {data.get('reason', 'Unknown')}")
                     return None
@@ -59,7 +59,7 @@ class GeoIPEnricher:
                     "timezone": data.get("timezone")
                 }
                 
-                # Cache result
+                # Lưu kết quả vào cache
                 self._cache[cache_key] = {
                     "data": geo_data,
                     "_cached_at": time.time()
@@ -73,13 +73,13 @@ class GeoIPEnricher:
     
     def enrich(self, ip: str) -> Dict[str, Any]:
         """
-        Enrich IP address with GeoIP information.
+        Làm giàu địa chỉ IP với thông tin GeoIP.
         
         Args:
-            ip: IP address string
+            ip: Chuỗi địa chỉ IP
             
         Returns:
-            Dict with geo information or empty dict
+            Dict chứa thông tin địa lý hoặc dict rỗng
         """
         if not ip:
             return {}
@@ -107,7 +107,7 @@ class GeoIPEnricher:
 
 
 class ThreatIntelligenceEnricher:
-    """Enrich alerts with threat intelligence (basic implementation)."""
+    """Làm giàu alert với threat intelligence (cài đặt cơ bản)."""
     
     def __init__(self):
         self.session = RetrySession(max_retries=1, timeout=2)
@@ -116,12 +116,12 @@ class ThreatIntelligenceEnricher:
     
     def _check_ip_reputation(self, ip: str) -> Dict[str, Any]:
         """
-        Check IP reputation (basic implementation).
+        Kiểm tra danh tiếng IP (cài đặt cơ bản).
         
-        Can be extended with:
+        Có thể mở rộng với:
         - AbuseIPDB API
         - VirusTotal API
-        - Custom threat feeds
+        - Các feed threat tuỳ chỉnh
         """
         if ip in self._known_malicious_ips:
             return {
@@ -130,7 +130,7 @@ class ThreatIntelligenceEnricher:
                 "source": "internal_blacklist"
             }
         
-        # Placeholder for future API integration
+        # Placeholder cho tích hợp API trong tương lai
         return {
             "is_malicious": False,
             "reputation": "unknown"
@@ -165,7 +165,7 @@ _threat_intel_enricher: Optional[ThreatIntelligenceEnricher] = None
 
 
 def get_geoip_enricher() -> GeoIPEnricher:
-    """Get or create global GeoIP enricher."""
+    """Lấy hoặc tạo thể hiện global của GeoIP enricher."""
     global _geoip_enricher
     if _geoip_enricher is None:
         _geoip_enricher = GeoIPEnricher()
@@ -173,7 +173,7 @@ def get_geoip_enricher() -> GeoIPEnricher:
 
 
 def get_threat_intel_enricher() -> ThreatIntelligenceEnricher:
-    """Get or create global threat intel enricher."""
+    """Lấy hoặc tạo thể hiện global của Threat Intelligence enricher."""
     global _threat_intel_enricher
     if _threat_intel_enricher is None:
         _threat_intel_enricher = ThreatIntelligenceEnricher()
@@ -182,15 +182,15 @@ def get_threat_intel_enricher() -> ThreatIntelligenceEnricher:
 
 def enrich_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Enrich alert with GeoIP and threat intelligence.
+    Làm giàu alert với GeoIP và threat intelligence.
     
     Args:
-        alert: Normalized alert dictionary
+        alert: Dict alert đã chuẩn hoá
         
     Returns:
-        Enriched alert with additional fields
+        Alert đã được làm giàu với các trường bổ sung
     """
-    # Prefer top-level src_ip/dest_ip if available, fallback to srcip/agent.ip
+    # Ưu tiên src_ip/dest_ip top-level nếu có, ngược lại dùng srcip/agent.ip
     srcip = alert.get("src_ip") or alert.get("srcip", "")
     agent = alert.get("agent", {})
     dstip = alert.get("dest_ip") or agent.get("ip", "")

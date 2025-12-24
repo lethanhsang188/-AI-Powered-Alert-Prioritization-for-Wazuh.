@@ -1,38 +1,79 @@
 version: '3.8'
 
 services:
-  pipeline:
+  wazuh-alert-pipeline:
     build: .
-    container_name: ai-apw
+    container_name: wazuh-alert-pipeline
     env_file:
       - .env
     volumes:
       - ./state:/app/state
-    ports:
-      - "8088:8088"
-    command: python bin/run_pipeline.py
+      - ./logs:/app/logs
+      - ~/.ssh:/home/appuser/.ssh:ro
+    networks:
+      - wazuh-network
     restart: unless-stopped
+    depends_on:
+      - wazuh-indexer
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8088/healthz').raise_for_status()"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
 
-  api:
-    build: .
-    container_name: ai-apw-api
-    env_file:
-      - .env
-    volumes:
-      - ./state:/app/state
+  # Optional: Wazuh Manager (if running in containers)
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.14.0
+    container_name: wazuh-manager
+    environment:
+      - WAZUH_MANAGER_API_HOST=0.0.0.0
     ports:
-      - "8088:8088"
-    command: python app.py
+      - "1514:1514/udp"
+      - "1515:1515/tcp"
+      - "514:514/udp"
+      - "55000:55000/tcp"
+    volumes:
+      - wazuh-manager-data:/var/ossec/data
+      - wazuh-manager-logs:/var/ossec/logs
+    networks:
+      - wazuh-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8088/healthz').raise_for_status()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
+  # Optional: Wazuh Indexer (if running in containers)
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.14.0
+    container_name: wazuh-indexer
+    environment:
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "WAZUH_INDEXER_PASSWORD=SecretPassword123!"
+    ports:
+      - "9200:9200/tcp"
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+    networks:
+      - wazuh-network
+    restart: unless-stopped
+
+  # Optional: pfSense (external service - not containerized)
+  # pfSense should be running separately on your network
+
+networks:
+  wazuh-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  wazuh-manager-data:
+    driver: local
+  wazuh-manager-logs:
+    driver: local
+  wazuh-indexer-data:
+    driver: local

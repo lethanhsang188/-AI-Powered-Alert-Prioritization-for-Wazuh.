@@ -1,4 +1,4 @@
-"""Alert correlation engine to group related alerts."""
+"""Động cơ tương quan alert để nhóm các cảnh báo liên quan."""
 import hashlib
 import logging
 from typing import Any, Dict, List, Optional, Set
@@ -10,14 +10,14 @@ logger = logging.getLogger(__name__)
 
 class AlertCorrelationEngine:
     """
-    Correlate related alerts based on common attributes.
+    Tương quan các cảnh báo liên quan dựa trên các thuộc tính chung.
     
-    Groups alerts by:
-    - Same source IP (campaign - all attack types) - NEW: For supply chain detection
-    - Same source IP + same attack type
-    - Same destination + same attack type
-    - Same signature + time window
-    - Same rule pattern + time window
+    Nhóm các cảnh báo theo:
+    - Cùng source IP (campaign - tất cả loại tấn công) - MỚI: cho phát hiện chuỗi cung ứng
+    - Cùng source IP + cùng loại tấn công
+    - Cùng destination + cùng loại tấn công
+    - Cùng signature + cửa sổ thời gian
+    - Cùng mẫu rule + cửa sổ thời gian
     """
     
     def __init__(self, time_window_minutes: int = 15):
@@ -57,29 +57,41 @@ class AlertCorrelationEngine:
         dstip = agent.get("ip", "")
         rule_id = str(rule.get("id", ""))
         
-        # Extract attack type from tags or rule groups
-        attack_type = None
-        rule_groups = rule.get("groups", [])
+        # Trích loại tấn công (dùng loại tấn công đã chuẩn hóa nếu có, fallback sang rule groups)
+        attack_type = alert.get("attack_type_normalized")
+        if not attack_type:
+            rule_groups = rule.get("groups", [])
+            # Priority: specific attack tags > rule groups
+            if "sql_injection" in rule_groups or "sqlinjection" in rule_groups:
+                attack_type = "sql_injection"
+            elif "command_injection" in rule_groups:
+                attack_type = "command_injection"
+            elif "xss" in rule_groups:
+                attack_type = "xss"
+            elif "lfi" in rule_groups or "local_file_inclusion" in rule_groups:
+                attack_type = "lfi"
+            elif "file_upload" in rule_groups or "webshell" in rule_groups:
+                attack_type = "file_upload"
+            elif "path_traversal" in rule_groups:
+                attack_type = "path_traversal"
+            elif "csrf" in rule_groups:
+                attack_type = "csrf"
+            elif "ssh_bruteforce" in rule_groups or ("ssh" in rule_groups and "bruteforce" in rule_groups):
+                attack_type = "ssh_bruteforce"
+            elif "bruteforce" in rule_groups or "authentication_failed" in rule_groups:
+                attack_type = "brute_force"
+            elif "syn_flood" in rule_groups or ("syn" in rule_groups and "flood" in rule_groups):
+                attack_type = "syn_flood"
+            elif "dos" in rule_groups or "ddos" in rule_groups:
+                attack_type = "dos"
+            elif "web_attack" in rule_groups:
+                attack_type = "web_attack"
+            elif "attack" in rule_groups:
+                attack_type = "attack"
         
-        # Priority: specific attack tags > rule groups
-        if "sql_injection" in rule_groups or "sqlinjection" in rule_groups:
-            attack_type = "sql_injection"
-        elif "command_injection" in rule_groups:
-            attack_type = "command_injection"
-        elif "xss" in rule_groups:
-            attack_type = "xss"
-        elif "path_traversal" in rule_groups:
-            attack_type = "path_traversal"
-        elif "web_attack" in rule_groups:
-            attack_type = "web_attack"
-        elif "bruteforce" in rule_groups or "authentication_failed" in rule_groups:
-            attack_type = "bruteforce"
-        elif "attack" in rule_groups:
-            attack_type = "attack"
-        
-        # Build correlation key based on type
+        # Tạo khóa tương quan dựa trên loại
         if correlation_type == "source_campaign":
-            # NEW: Group all attacks from same source (for supply chain detection)
+            # MỚI: Nhóm tất cả tấn công từ cùng một nguồn (cho phát hiện chuỗi cung ứng)
             if srcip:
                 return f"campaign:src:{srcip}"
         elif correlation_type == "source_attack":
@@ -104,7 +116,7 @@ class AlertCorrelationEngine:
         group_timestamp: str,
         window_minutes: int
     ) -> bool:
-        """Check if alert is within time window of group."""
+        """Kiểm tra xem alert có nằm trong cửa sổ thời gian của nhóm hay không."""
         try:
             alert_dt = datetime.fromisoformat(alert_timestamp.replace("Z", "+00:00"))
             group_dt = datetime.fromisoformat(group_timestamp.replace("Z", "+00:00"))
@@ -229,20 +241,33 @@ class AlertCorrelationEngine:
             # Create new group
             self.alert_groups[group_key] = [alert]
             
-            # Extract attack pattern
-            rule = alert.get("rule", {})
-            rule_groups = rule.get("groups", [])
-            attack_pattern = None
-            if "sql_injection" in rule_groups or "sqlinjection" in rule_groups:
-                attack_pattern = "sql_injection"
-            elif "command_injection" in rule_groups:
-                attack_pattern = "command_injection"
-            elif "xss" in rule_groups:
-                attack_pattern = "xss"
-            elif "web_attack" in rule_groups:
-                attack_pattern = "web_attack"
-            elif "bruteforce" in rule_groups:
-                attack_pattern = "bruteforce"
+            # Extract attack pattern (use normalized attack type if available, fallback to rule groups)
+            attack_pattern = alert.get("attack_type_normalized")
+            if not attack_pattern:
+                rule = alert.get("rule", {})
+                rule_groups = rule.get("groups", [])
+                if "sql_injection" in rule_groups or "sqlinjection" in rule_groups:
+                    attack_pattern = "sql_injection"
+                elif "command_injection" in rule_groups:
+                    attack_pattern = "command_injection"
+                elif "xss" in rule_groups:
+                    attack_pattern = "xss"
+                elif "lfi" in rule_groups or "local_file_inclusion" in rule_groups:
+                    attack_pattern = "lfi"
+                elif "file_upload" in rule_groups or "webshell" in rule_groups:
+                    attack_pattern = "file_upload"
+                elif "csrf" in rule_groups:
+                    attack_pattern = "csrf"
+                elif "ssh_bruteforce" in rule_groups or ("ssh" in rule_groups and "bruteforce" in rule_groups):
+                    attack_pattern = "ssh_bruteforce"
+                elif "bruteforce" in rule_groups or "authentication_failed" in rule_groups:
+                    attack_pattern = "brute_force"
+                elif "syn_flood" in rule_groups or ("syn" in rule_groups and "flood" in rule_groups):
+                    attack_pattern = "syn_flood"
+                elif "dos" in rule_groups or "ddos" in rule_groups:
+                    attack_pattern = "dos"
+                elif "web_attack" in rule_groups:
+                    attack_pattern = "web_attack"
             
             # For source_campaign, check supply chain after adding first alert
             supply_chain_info = None
@@ -345,7 +370,15 @@ class AlertCorrelationEngine:
                     {"xss", "sql_injection"},
                     {"sql_injection", "command_injection"},
                     {"xss", "command_injection"},
-                    {"path_traversal", "command_injection"}
+                    {"path_traversal", "command_injection"},
+                    {"sql_injection", "file_upload"},
+                    {"xss", "file_upload"},
+                    {"lfi", "command_injection"},
+                    {"lfi", "file_upload"},
+                    {"brute_force", "sql_injection"},
+                    {"ssh_bruteforce", "command_injection"},
+                    {"dos", "sql_injection"},  # DoS to distract + SQL injection
+                    {"syn_flood", "xss"}  # DoS + web attack
                 ]
                 if attack_types in critical_combos:
                     severity = "high"

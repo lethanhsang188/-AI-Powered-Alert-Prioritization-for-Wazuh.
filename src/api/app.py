@@ -1,4 +1,4 @@
-"""Flask API service with healthz/readyz endpoints."""
+"""Dịch vụ API Flask với các endpoint healthz/readyz."""
 import logging
 import os
 
@@ -16,18 +16,18 @@ app = Flask(__name__)
 
 @app.route("/healthz", methods=["GET"])
 def healthz():
-    """Liveness probe - returns 200 if service is running."""
+    """Liveness probe - trả về 200 nếu dịch vụ đang chạy."""
     return jsonify({"status": "ok"}), 200
 
 
 @app.route("/readyz", methods=["GET"])
 def readyz():
     """
-    Readiness probe - returns 200 if service is ready.
+    Readiness probe - trả về 200 nếu dịch vụ sẵn sàng.
     
-    Checks:
-    - Cursor file directory exists (or can be created)
-    - Wazuh API connection (basic check)
+    Kiểm tra:
+    - Thư mục file cursor tồn tại (hoặc có thể tạo được)
+    - Kết nối tới Wazuh API (kiểm tra cơ bản)
     """
     from src.common.config import (
         CURSOR_PATH,

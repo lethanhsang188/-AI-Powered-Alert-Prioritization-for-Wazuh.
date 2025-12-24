@@ -1,30 +1,49 @@
+# AI-Powered Alert Prioritization for Wazuh
 FROM python:3.11-slim
 
-WORKDIR /app
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+RUN apt-get update && apt-get install -y \
+    openssh-client \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Set work directory
+WORKDIR /app
+
+# Copy requirements first for better caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
 COPY bin/ ./bin/
-COPY app.py .
+COPY configs/ ./configs/
+COPY sample_alerts/ ./sample_alerts/
 
-# Create state directory
-RUN mkdir -p /app/state
+# Create necessary directories
+RUN mkdir -p /app/state /app/logs && \
+    chown -R appuser:appuser /app
 
-# Make scripts executable
-RUN chmod +x bin/*.py
+# Switch to non-root user
+USER appuser
 
-# Expose API port
-EXPOSE 8088
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
 
-# Default command (can be overridden in docker-compose)
-CMD ["python", "app.py"]
+# Default command
+CMD ["python", "bin/run_pipeline.py"]
 
+# Expose port for API service
+EXPOSE 5000

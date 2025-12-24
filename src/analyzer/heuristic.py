@@ -5,15 +5,15 @@ from src.common.attack_type_normalizer import normalize_attack_type, get_attack_
 
 logger = logging.getLogger(__name__)
 
-# Rule groups categorized by severity level
-# Critical groups: Most severe attacks that require immediate attention
+# Các nhóm rule được phân loại theo mức độ nghiêm trọng
+# Nhóm Critical: Các tấn công nghiêm trọng nhất cần xử lý ngay lập tức
 CRITICAL_GROUPS: Set[str] = {
     "sql_injection",
     "sqlinjection",
-    "attack",  # General attack group (includes successful attacks)
+    "attack",  # Nhóm tấn công chung (bao gồm các tấn công thành công)
 }
 
-# High groups: Serious security issues
+# Nhóm High: Các vấn đề bảo mật nghiêm trọng
 HIGH_GROUPS: Set[str] = {
     "authentication_failed",
     "bruteforce",
@@ -24,43 +24,43 @@ HIGH_GROUPS: Set[str] = {
     "suricata",
 }
 
-# Medium groups: Suspicious activities that need review
+# Nhóm Medium: Các hoạt động đáng ngờ cần xem xét
 MEDIUM_GROUPS: Set[str] = {
     "web",
     "invalid_access",
 }
 
-# All severity groups combined
+# Tất cả các nhóm mức độ nghiêm trọng kết hợp
 HIGH_SEVERITY_GROUPS = CRITICAL_GROUPS | HIGH_GROUPS | MEDIUM_GROUPS
 
-# Rule IDs that indicate successful attacks (should have higher multiplier)
+# Rule IDs cho biết tấn công thành công (nên có multiplier cao hơn)
 SUCCESSFUL_ATTACK_RULES = {
-    "31106",  # Web attack returned 200 (success)
+    "31106",  # Tấn công web trả về 200 (thành công)
 }
 
-# Rule IDs that are frequency-based (multiple events from same source)
+# Rule IDs dựa trên tần suất (nhiều sự kiện từ cùng nguồn)
 FREQUENCY_BASED_RULES = {
-    "31151",  # Multiple web server 400 error codes
-    "31152",  # Multiple SQL injection attempts
-    "31153",  # Multiple common web attacks
-    "31154",  # Multiple XSS attempts
-    "31161",  # Multiple 501 errors
-    "31162",  # Multiple 500 errors
-    "31163",  # Multiple 503 errors
+    "31151",  # Nhiều mã lỗi 400 từ web server
+    "31152",  # Nhiều lần thử SQL injection
+    "31153",  # Nhiều tấn công web phổ biến
+    "31154",  # Nhiều lần thử XSS
+    "31161",  # Nhiều lỗi 501
+    "31162",  # Nhiều lỗi 500
+    "31163",  # Nhiều lỗi 503
 }
 
-# XSS detection rules (should have higher priority)
+# Rules phát hiện XSS (nên có độ ưu tiên cao hơn)
 XSS_RULES = {
-    "31105",  # XSS detection
-    "31154",  # Multiple XSS attempts
+    "31105",  # Phát hiện XSS
+    "31154",  # Nhiều lần thử XSS
 }
 
 
 def _calculate_base_score(rule_level: int) -> float:
     """
-    Calculate base score with non-linear curve for high levels.
+    Tính điểm cơ bản với đường cong phi tuyến cho các mức cao.
     
-    For levels 12-15, use steeper curve to better differentiate critical alerts.
+    Đối với mức 12-15, sử dụng đường cong dốc hơn để phân biệt rõ hơn các cảnh báo quan trọng.
     """
     if rule_level <= 0:
         return 0.0
@@ -68,23 +68,23 @@ def _calculate_base_score(rule_level: int) -> float:
     if rule_level >= 15:
         return 1.0
     
-    # Non-linear scoring: higher levels get steeper curve
+    # Tính điểm phi tuyến: các mức cao hơn có đường cong dốc hơn
     if rule_level >= 12:
-        # Levels 12-14: Use curve to push scores higher
-        # Level 12: 0.80 -> 0.85, Level 13: 0.87 -> 0.90, Level 14: 0.93 -> 0.95
-        normalized = (rule_level - 12) / 3.0  # 0.0 to 1.0 for levels 12-14
-        return 0.80 + (normalized * 0.15)  # 0.80 to 0.95
+        # Mức 12-14: Sử dụng đường cong để đẩy điểm cao hơn
+        # Mức 12: 0.80 -> 0.85, Mức 13: 0.87 -> 0.90, Mức 14: 0.93 -> 0.95
+        normalized = (rule_level - 12) / 3.0  # 0.0 đến 1.0 cho mức 12-14
+        return 0.80 + (normalized * 0.15)  # 0.80 đến 0.95
     else:
-        # Levels 1-11: Linear scaling
+        # Mức 1-11: Tỷ lệ tuyến tính
         return min(rule_level / 15.0, 1.0)
 
 
 def _calculate_group_bonus(rule_groups: list) -> float:
     """
-    Calculate bonus score based on rule groups with weighted severity.
+    Tính điểm thưởng dựa trên các nhóm rule với trọng số mức độ nghiêm trọng.
     
     Returns:
-        Bonus score (0.0 to 0.15)
+        Điểm thưởng (0.0 đến 0.15)
     """
     if not rule_groups:
         return 0.0
@@ -94,41 +94,41 @@ def _calculate_group_bonus(rule_groups: list) -> float:
     
     groups_set = set(rule_groups)
     
-    # Check for critical groups (highest priority)
+    # Kiểm tra nhóm critical (ưu tiên cao nhất)
     if groups_set & CRITICAL_GROUPS:
-        return 0.15  # Highest bonus for critical attacks
+        return 0.15  # Điểm thưởng cao nhất cho tấn công critical
     
-    # Check for high groups
+    # Kiểm tra nhóm high
     if groups_set & HIGH_GROUPS:
-        return 0.10  # Standard bonus for high-severity
+        return 0.10  # Điểm thưởng chuẩn cho mức độ nghiêm trọng cao
     
-    # Check for medium groups
+    # Kiểm tra nhóm medium
     if groups_set & MEDIUM_GROUPS:
-        return 0.05  # Lower bonus for medium-severity
+        return 0.05  # Điểm thưởng thấp hơn cho mức độ nghiêm trọng trung bình
     
     return 0.0
 
 
 def _calculate_rule_specific_multiplier(rule_id: str, rule_level: int) -> float:
     """
-    Calculate multiplier for specific rules that indicate higher severity.
+    Tính multiplier cho các rule cụ thể cho thấy mức độ nghiêm trọng cao hơn.
     
     Returns:
-        Multiplier (1.0 to 1.25)
+        Multiplier (1.0 đến 1.25)
     """
     multiplier = 1.0
     
-    # Successful attacks get higher multiplier
+    # Tấn công thành công có multiplier cao hơn
     if rule_id in SUCCESSFUL_ATTACK_RULES:
-        multiplier = 1.15  # 15% boost for successful attacks
+        multiplier = 1.15  # Tăng 15% cho tấn công thành công
     
-    # XSS attacks are high priority (can steal sessions, inject malware)
+    # Tấn công XSS có độ ưu tiên cao (có thể đánh cắp session, inject malware)
     elif rule_id in XSS_RULES:
-        multiplier = 1.20  # 20% boost for XSS attacks
+        multiplier = 1.20  # Tăng 20% cho tấn công XSS
     
-    # Frequency-based rules indicate persistent attacks
+    # Rules dựa trên tần suất cho thấy tấn công dai dẳng
     elif rule_id in FREQUENCY_BASED_RULES:
-        multiplier = 1.10  # 10% boost for frequency-based detection
+        multiplier = 1.10  # Tăng 10% cho phát hiện dựa trên tần suất
     
     return multiplier
 
@@ -151,17 +151,17 @@ def score(alert: Dict[str, Any]) -> float:
     rule_id = str(rule.get("id", ""))
     rule_groups = rule.get("groups", [])
     
-    # Normalize attack type to ensure consistent scoring across agents
+    # Chuẩn hóa loại tấn công để đảm bảo tính điểm nhất quán giữa các agent
     attack_type = normalize_attack_type(alert)
     attack_priority = get_attack_type_priority(attack_type)
     
-    # Base score with non-linear curve
+    # Điểm cơ bản với đường cong phi tuyến
     base_score = _calculate_base_score(rule_level)
     
-    # Attack type bonus (ensures same attack type gets similar score regardless of agent/rule)
+    # Điểm thưởng loại tấn công (đảm bảo cùng loại tấn công có điểm tương tự bất kể agent/rule)
     if attack_type:
-        # Add bonus based on attack type priority (normalized, not rule-specific)
-        attack_bonus = attack_priority * 0.01  # 0.01-0.10 bonus based on attack type
+        # Thêm điểm thưởng dựa trên độ ưu tiên loại tấn công (đã chuẩn hóa, không phụ thuộc rule)
+        attack_bonus = attack_priority * 0.01  # Điểm thưởng 0.01-0.10 dựa trên loại tấn công
         base_score += attack_bonus
         logger.debug(
             "Attack type normalized: %s (priority: %d, bonus: %.3f)",
@@ -177,80 +177,80 @@ def score(alert: Dict[str, Any]) -> float:
             },
         )
     
-    # === FIELD-BASED BONUSES ===
+    # === ĐIỂM THƯỞNG DỰA TRÊN TRƯỜNG ===
     
-    # 1. Suricata severity bonus (independent of rule level)
+    # 1. Điểm thưởng mức độ nghiêm trọng Suricata (độc lập với rule level)
     suricata_alert = alert.get("suricata_alert", {})
     if suricata_alert:
         suricata_severity = suricata_alert.get("severity", 0)
         if isinstance(suricata_severity, (int, float)):
             if suricata_severity >= 3:
-                base_score += 0.15  # High severity Suricata alert
+                base_score += 0.15  # Cảnh báo Suricata mức độ cao
             elif suricata_severity >= 2:
-                base_score += 0.10  # Medium severity
+                base_score += 0.10  # Mức độ trung bình
         
-        # Alert action bonus: "allowed" = attack passed through firewall (more dangerous)
+        # Điểm thưởng hành động cảnh báo: "allowed" = tấn công đã vượt qua firewall (nguy hiểm hơn)
         alert_action = suricata_alert.get("action", "")
         if alert_action == "allowed":
-            base_score += 0.10  # Attack passed through firewall
+            base_score += 0.10  # Tấn công đã vượt qua firewall
     
-    # 2. HTTP context bonus
+    # 2. Điểm thưởng ngữ cảnh HTTP
     http_context = alert.get("http", {})
     if http_context:
-        # Suspicious user agents (attack tools)
+        # User agent đáng ngờ (công cụ tấn công)
         user_agent = http_context.get("user_agent", "").lower()
         attack_tools = ["sqlmap", "nmap", "nikto", "burp", "metasploit", "w3af", "acunetix"]
         if any(tool in user_agent for tool in attack_tools):
-            base_score += 0.15  # Attack tool detected
+            base_score += 0.15  # Phát hiện công cụ tấn công
         
-        # Suspicious status codes
+        # Mã trạng thái đáng ngờ
         status = str(http_context.get("status", ""))
         if status == "200":
-            base_score += 0.10  # Successful request (possible exploitation)
+            base_score += 0.10  # Yêu cầu thành công (có thể bị khai thác)
         elif status.startswith("5"):
-            base_score += 0.05  # Server error (possible exploitation attempt)
+            base_score += 0.05  # Lỗi server (có thể là nỗ lực khai thác)
         
-        # Suspicious URL patterns
+        # Mẫu URL đáng ngờ
         url = http_context.get("url", "").lower()
         attack_patterns = ["sqli", "xss", "union", "select", "exec", "cmd", "shell", "eval", "base64"]
         if any(pattern in url for pattern in attack_patterns):
-            base_score += 0.15  # Attack pattern in URL
+            base_score += 0.15  # Mẫu tấn công trong URL
     
-    # 3. Network flow bonus
+    # 3. Điểm thưởng luồng mạng
     flow = alert.get("flow", {})
     if flow:
-        # High bytes/packets = potential data exfiltration or large response
+        # Bytes/packets cao = có thể là rò rỉ dữ liệu hoặc phản hồi lớn
         bytes_toclient = flow.get("bytes_toclient", 0)
         if isinstance(bytes_toclient, (int, float)) and bytes_toclient > 10000:
-            base_score += 0.10  # Large response (possible data exfiltration)
+            base_score += 0.10  # Phản hồi lớn (có thể là rò rỉ dữ liệu)
         
-        # High bytes to server = potential upload/exploitation
+        # Bytes đến server cao = có thể là upload/khai thác
         bytes_toserver = flow.get("bytes_toserver", 0)
         if isinstance(bytes_toserver, (int, float)) and bytes_toserver > 5000:
-            base_score += 0.05  # Large request (possible exploitation)
+            base_score += 0.05  # Yêu cầu lớn (có thể là khai thác)
     
-    # 4. Correlation bonus (multiple alerts from same source = attack campaign)
+    # 4. Điểm thưởng tương quan (nhiều cảnh báo từ cùng nguồn = chiến dịch tấn công)
     correlation = alert.get("correlation", {})
     if correlation and correlation.get("is_correlated"):
         group_size = correlation.get("group_size", 1)
         if isinstance(group_size, (int, float)):
             if group_size >= 5:
-                base_score += 0.20  # Large attack campaign
+                base_score += 0.20  # Chiến dịch tấn công lớn
             elif group_size >= 3:
-                base_score += 0.10  # Multiple attacks from same source
+                base_score += 0.10  # Nhiều tấn công từ cùng nguồn
         
-        # NEW: Supply chain attack bonus (multiple attack types from same source)
+        # MỚI: Điểm thưởng tấn công chuỗi cung ứng (nhiều loại tấn công từ cùng nguồn)
         supply_chain = correlation.get("supply_chain")
         if supply_chain and supply_chain.get("is_supply_chain"):
             attack_types_count = len(supply_chain.get("attack_types", []))
             severity = supply_chain.get("severity", "low")
             
             if severity == "high":
-                base_score += 0.25  # High severity supply chain (3+ attack types or critical combo)
+                base_score += 0.25  # Chuỗi cung ứng mức độ cao (3+ loại tấn công hoặc kết hợp critical)
             elif severity == "medium":
-                base_score += 0.15  # Medium severity supply chain (2 attack types)
+                base_score += 0.15  # Chuỗi cung ứng mức độ trung bình (2 loại tấn công)
             else:
-                base_score += 0.10  # Low severity supply chain
+                base_score += 0.10  # Chuỗi cung ứng mức độ thấp
             
             logger.debug(
                 f"Supply chain attack bonus applied: {attack_types_count} attack types, severity={severity}",
@@ -263,11 +263,11 @@ def score(alert: Dict[str, Any]) -> float:
                 }
             )
     
-    # Group-based bonus (existing)
+    # Điểm thưởng dựa trên nhóm (hiện có)
     group_bonus = _calculate_group_bonus(rule_groups)
     base_score = min(base_score + group_bonus, 1.0)
     
-    # Rule-specific multiplier (existing)
+    # Multiplier cụ thể cho rule (hiện có)
     multiplier = _calculate_rule_specific_multiplier(rule_id, rule_level)
     final_score = min(base_score * multiplier, 1.0)
     
